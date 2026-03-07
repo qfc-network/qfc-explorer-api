@@ -3,6 +3,7 @@ import { RpcClient } from './rpc.js';
 import type { TraceCall } from './types.js';
 import type { BlockResult } from './block.js';
 import { hexToBigIntString } from './utils.js';
+import { internalTxsProcessed } from './metrics.js';
 
 type InternalTx = {
   txHash: string;
@@ -140,6 +141,7 @@ export async function processInternalTxs(rpc: RpcClient, result: BlockResult): P
     );
 
     await client.query('COMMIT');
+    internalTxsProcessed.inc(allInternals.length);
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;

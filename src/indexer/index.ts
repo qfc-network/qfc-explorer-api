@@ -10,6 +10,12 @@ import {
   resolveFinalizedHeight, refreshDailyStats,
   INDEXER_ADMIN_RESCAN, INDEXER_ADMIN_RETRY,
 } from './state.js';
+import {
+  startMetricsServer, stopMetricsServer,
+  blocksProcessed, blocksSkipped, blockProcessDuration, pipelineStageDuration,
+  txsProcessed, indexerHeight, chainHeight, indexerLag,
+  batchDuration, batchSize,
+} from './metrics.js';
 
 /**
  * Index a single block through the full pipeline:
@@ -19,22 +25,37 @@ import {
  *   4. Internal tx processor — debug_traceTransaction → internal_transactions
  */
 async function indexBlock(rpc: RpcClient, height: bigint): Promise<number> {
+  const endBlock = blockProcessDuration.startTimer();
+
   // Step 1: Block + Transactions + Receipts + Events + Accounts
+  const endStage1 = pipelineStageDuration.startTimer({ stage: 'block' });
   const result = await processBlock(rpc, height);
-  if (!result) return 0;
+  endStage1();
+  if (!result) { endBlock(); return 0; }
 
   // Step 2 & 3: Token + Contract (independent, run in parallel)
+  const endStage2 = pipelineStageDuration.startTimer({ stage: 'token_contract' });
   await Promise.all([
     processTokenTransfers(rpc, result),
     processContracts(rpc, result),
   ]);
+  endStage2();
 
   // Step 4: Internal transactions (requires trace API, may not be available)
+  const endStage3 = pipelineStageDuration.startTimer({ stage: 'internal_tx' });
   await processInternalTxs(rpc, result).catch((e) =>
     console.warn(`Internal tx tracing failed for block ${height}:`, e.message)
   );
+  endStage3();
 
   await setLastProcessedHeight(height);
+  endBlock();
+
+  // Update counters
+  blocksProcessed.inc();
+  txsProcessed.inc(result.txs.length);
+  indexerHeight.set(Number(height));
+
   return result.txs.length;
 }
 
@@ -54,6 +75,7 @@ async function indexBlockWithRetry(
   if (skipOnError) {
     console.warn(`Skipping block ${height} after ${attempts} failed attempts`);
     await recordFailedBlock(height, lastError);
+    blocksSkipped.inc();
     return null;
   }
 
@@ -70,9 +92,11 @@ async function runOnce(
 ): Promise<bigint> {
   const latestHex = await rpc.callWithRetry<string>('eth_blockNumber');
   const latest = parseHeight(latestHex);
+  chainHeight.set(Number(latest));
   const target = useFinalized ? await resolveFinalizedHeight(rpc, latest) : latest;
   const effectiveTarget = maxHeight !== null && maxHeight < target ? maxHeight : target;
   const startedAt = Date.now();
+  const endBatch = batchDuration.startTimer();
   let totalTxs = 0;
   let totalReceipts = 0;
   let indexedBlocks = 0;
@@ -97,8 +121,11 @@ async function runOnce(
     totalReceipts += count;
   }
 
+  endBatch();
   console.log('Indexing complete');
   const durationMs = Date.now() - startedAt;
+  batchSize.set(indexedBlocks);
+  indexerLag.set(Number(latest) - Number(effectiveTarget));
   const tps = durationMs > 0 ? (totalTxs / (durationMs / 1000)).toFixed(2) : '0';
   console.log(
     `Batch stats: blocks=${indexedBlocks}, skipped=${skippedBlocks}, txs=${totalTxs}, receipts=${totalReceipts}, duration=${durationMs}ms, tps=${tps}`
@@ -137,6 +164,11 @@ async function run(): Promise<void> {
     : 3;
   const skipOnError = process.env.INDEXER_SKIP_ON_ERROR === 'true';
   const retryFailed = process.env.INDEXER_RETRY_FAILED === 'true';
+
+  const metricsPort = process.env.INDEXER_METRICS_PORT
+    ? Number(process.env.INDEXER_METRICS_PORT)
+    : 9090;
+  startMetricsServer(metricsPort);
 
   const archiveUrl = process.env.RPC_ARCHIVE_URL || undefined;
   const rpc = new RpcClient(rpcUrl, archiveUrl);
@@ -194,5 +226,6 @@ async function run(): Promise<void> {
 
 run().catch((error) => {
   console.error('Indexer failed:', error);
+  stopMetricsServer();
   process.exit(1);
 });

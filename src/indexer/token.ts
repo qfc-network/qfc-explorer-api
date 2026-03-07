@@ -4,6 +4,7 @@ import { RpcClient } from './rpc.js';
 import type { RpcReceipt } from './types.js';
 import type { BlockResult } from './block.js';
 import { decodeString, decodeUint256, decodeUint256Pair, decodeUint256Arrays, parseAddressFromTopic } from './utils.js';
+import { tokenTransfersProcessed } from './metrics.js';
 
 const ERC20_TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a7a5c6b6e0f';
 const ERC1155_TRANSFER_SINGLE_TOPIC = '0xc3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62';
@@ -279,6 +280,7 @@ export async function processTokenTransfers(rpc: RpcClient, result: BlockResult)
     }
 
     await client.query('COMMIT');
+    tokenTransfersProcessed.inc(transfers.length);
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;

@@ -37,15 +37,15 @@
 
 ## 计划中
 
-### Phase 4: Indexer 可观测性
+### Phase 4: Indexer 可观测性 ✅
 > Indexer 专属 Prometheus 指标，提升运维可见性
 
-- [ ] 处理速度指标 (blocks/sec, txs/sec)
-- [ ] RPC 调用延迟直方图 (按方法分类)
-- [ ] 队列深度 (待处理区块数)
-- [ ] Token/Contract/Internal Tx 处理计数
-- [ ] 错误率 + 失败区块计数
-- [ ] Indexer 独立 /metrics 端点 (与 API 分离)
+- [x] 处理速度指标 (block_process_duration, pipeline_stage_duration, batch_duration)
+- [x] RPC 调用延迟直方图 (rpc_duration_seconds, 按 method + node 分类)
+- [x] 队列深度 (lag_blocks = chain_height - current_height)
+- [x] Token/Contract/Internal Tx 处理计数 (token_transfers_total, contracts_detected_total, internal_txs_total)
+- [x] 错误率 + 失败区块计数 (rpc_errors_total, blocks_skipped_total)
+- [x] Indexer 独立 /metrics 端点 (:9090, 与 API :3001 分离)
 
 ### Phase 5: 合约验证增强
 > Solidity source verification + ABI 解码，提升数据可读性
@@ -89,7 +89,7 @@
 ## 优先级排序
 
 ```
-Phase 4: Indexer 可观测性    ← 运维刚需，复杂度低
+Phase 4: Indexer 可观测性    ✅ 已完成
 Phase 5: 合约验证增强        ← 用户体验核心，中等复杂度
 Phase 6: 实时推送增强        ← 已有基础，增量开发
 Phase 7: 搜索优化            ← 数据量增长后再做

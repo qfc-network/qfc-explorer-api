@@ -2,6 +2,7 @@ import { getPool } from '../db/pool.js';
 import { RpcClient } from './rpc.js';
 import type { BlockResult } from './block.js';
 import { refreshAccountState } from './block.js';
+import { contractsDetected } from './metrics.js';
 
 /**
  * Process contract creations from block receipts: upsert contracts table,
@@ -89,6 +90,7 @@ export async function processContracts(rpc: RpcClient, result: BlockResult): Pro
     }
 
     await client.query('COMMIT');
+    contractsDetected.inc(contractAddresses.size);
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;

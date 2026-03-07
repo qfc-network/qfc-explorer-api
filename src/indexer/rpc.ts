@@ -1,4 +1,5 @@
 import { setTimeout as delay } from 'node:timers/promises';
+import { rpcCallDuration, rpcCallErrors } from './metrics.js';
 
 type JsonRpcResponse<T> = {
   jsonrpc: '2.0';
@@ -85,19 +86,33 @@ export class RpcClient {
   private async callUrl<T>(url: string, method: string, params: unknown[]): Promise<T> {
     const id = this.idCounter++;
     const body = JSON.stringify({ jsonrpc: '2.0', id, method, params });
+    const nodeLabel = new URL(url).host;
+    const end = rpcCallDuration.startTimer({ method, node: nodeLabel });
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+    } catch (error) {
+      end();
+      rpcCallErrors.inc({ method, node: nodeLabel });
+      throw error;
+    }
 
     if (!res.ok) {
+      end();
+      rpcCallErrors.inc({ method, node: nodeLabel });
       throw new Error(`RPC HTTP ${res.status}: ${res.statusText}`);
     }
 
     const payload = (await res.json()) as JsonRpcResponse<T>;
+    end();
+
     if (payload.error) {
+      rpcCallErrors.inc({ method, node: nodeLabel });
       throw new Error(`RPC ${payload.error.code}: ${payload.error.message}`);
     }
 

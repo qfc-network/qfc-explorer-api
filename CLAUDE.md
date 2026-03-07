@@ -103,6 +103,21 @@ All routes return consistent JSON:
 - `qfc_db_healthy` / `qfc_rpc_healthy` — gauge (1=ok, 0=down)
 - Default Node.js metrics (GC, event loop, memory)
 
+### Indexer Metrics (`:9090/metrics`)
+- `qfc_indexer_blocks_processed_total` — counter
+- `qfc_indexer_blocks_skipped_total` — counter
+- `qfc_indexer_block_process_duration_seconds` — histogram
+- `qfc_indexer_pipeline_stage_duration_seconds` — histogram by stage (block, token_contract, internal_tx)
+- `qfc_indexer_txs_processed_total` — counter
+- `qfc_indexer_current_height` / `qfc_indexer_chain_height` — gauge
+- `qfc_indexer_lag_blocks` — gauge
+- `qfc_indexer_rpc_duration_seconds` — histogram by method/node
+- `qfc_indexer_rpc_errors_total` — counter by method/node
+- `qfc_indexer_token_transfers_total` / `qfc_indexer_contracts_detected_total` / `qfc_indexer_internal_txs_total` — counter
+- `qfc_indexer_batch_duration_seconds` — histogram
+- `qfc_indexer_batch_size_blocks` — gauge
+- Default Node.js metrics (prefixed `qfc_indexer_`)
+
 ## Indexer
 The indexer (`src/indexer/index.ts`) is a standalone process that continuously polls the QFC node
 and writes blocks, transactions, receipts, events, accounts, tokens, and token transfers to PostgreSQL.
@@ -153,6 +168,7 @@ Refreshes `daily_stats` table after each batch.
 | `INDEXER_BLOCK_RETRIES` | `3` | Retry attempts per block on failure |
 | `INDEXER_SKIP_ON_ERROR` | `false` | Skip failed blocks instead of halting |
 | `INDEXER_RETRY_FAILED` | `false` | Retry previously failed blocks on startup |
+| `INDEXER_METRICS_PORT` | `9090` | Indexer Prometheus metrics port |
 
 ## Related Repos
 - [qfc-explorer](https://github.com/qfc-network/qfc-explorer) — Next.js frontend
