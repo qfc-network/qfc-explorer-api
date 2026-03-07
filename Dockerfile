@@ -17,4 +17,5 @@ ENV PORT=3001
 ENV HOST=0.0.0.0
 EXPOSE 3001
 
+# Default: run API server. Override with "node dist/indexer/index.js" for indexer.
 CMD ["node", "dist/server.js"]

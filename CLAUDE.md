@@ -16,6 +16,9 @@ Separated from [qfc-explorer](https://github.com/qfc-network/qfc-explorer) (Next
 npm run dev          # Dev server (tsx watch, auto-reload)
 npm run build        # Production build (tsc)
 npm start            # Start production server (node dist/server.js)
+npm run start:indexer # Start indexer (node dist/indexer/index.js)
+npm run indexer      # Dev indexer (tsx, no watch)
+npm run indexer:dev  # Dev indexer (tsx watch, auto-reload)
 npm run typecheck    # TypeScript check (tsc --noEmit)
 ```
 
@@ -52,6 +55,13 @@ src/
   middleware/
     metrics.ts           # Prometheus histogram/counter/gauge registration + /metrics endpoint
     metrics-updater.ts   # Background timer updating blockchain gauges every 15s
+  indexer/
+    index.ts             # Main indexer entry point (block processing, continuous polling)
+    rpc.ts               # RpcClient with retry logic (separate from lib/rpc.ts)
+    types.ts             # RPC response types (RpcBlock, RpcTransaction, RpcReceipt, RpcLog)
+    utils.ts             # Hex/buffer/decode utilities
+    qfc.ts               # QFC-specific RPC types (validators, epoch, inference, governance)
+    __tests__/            # Indexer unit tests
 ```
 
 ## Database
@@ -87,6 +97,18 @@ All routes return consistent JSON:
 - `qfc_db_healthy` / `qfc_rpc_healthy` — gauge (1=ok, 0=down)
 - Default Node.js metrics (GC, event loop, memory)
 
+## Indexer
+The indexer (`src/indexer/index.ts`) is a standalone process that continuously polls the QFC node
+and writes blocks, transactions, receipts, events, accounts, tokens, and token transfers to PostgreSQL.
+
+- Run separately from the API server (same image, different command)
+- Docker: `command: ["node", "dist/indexer/index.js"]`
+- Processes blocks sequentially, receipts in batches of 8 concurrently
+- Tracks ERC-20/721/1155 token transfers and updates `token_balances` incrementally
+- Fetches token metadata (name, symbol, decimals) on first transfer detection
+- Admin commands via `indexer_state` table: rescan from height, retry failed blocks
+- Refreshes `daily_stats` table after each batch
+
 ## QFC-Specific Notes
 - **EVM version**: QFC does NOT support PUSH0. Always `evmVersion: "paris"`.
 - **eth_call quirk**: QFC testnet may return `0x` for view functions. Use `eth_getStorageAt` as workaround.
@@ -110,6 +132,13 @@ All routes return consistent JSON:
 | `HOST` | `0.0.0.0` | Bind address |
 | `CORS_ORIGIN` | `*` | Allowed CORS origins |
 | `SSE_INTERVAL_MS` | `5000` | SSE push interval (min 3000ms) |
+| `REDIS_URL` | — | Redis connection string (optional, cache disabled if unset) |
+| `INDEXER_START_HEIGHT` | `0` | Block height to start indexing from |
+| `INDEXER_POLL_INTERVAL_MS` | `10000` | Polling interval between indexing batches |
+| `INDEXER_USE_FINALIZED` | `true` | Only index finalized blocks |
+| `INDEXER_BLOCK_RETRIES` | `3` | Retry attempts per block on failure |
+| `INDEXER_SKIP_ON_ERROR` | `false` | Skip failed blocks instead of halting |
+| `INDEXER_RETRY_FAILED` | `false` | Retry previously failed blocks on startup |
 
 ## Related Repos
 - [qfc-explorer](https://github.com/qfc-network/qfc-explorer) — Next.js frontend
