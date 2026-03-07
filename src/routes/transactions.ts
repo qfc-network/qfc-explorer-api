@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import {
   getTransactionsPage, getTransactionByHash, getReceiptLogsByTxHash,
+  getInternalTxsByTxHash,
 } from '../db/queries.js';
 import { rpcCallSafe } from '../lib/rpc.js';
 import { clamp, parseNumber, parseOrder } from '../lib/pagination.js';
@@ -82,5 +83,20 @@ export default async function transactionsRoutes(app: FastifyInstance) {
     // Cache RPC results for shorter TTL (may get indexed later)
     await cacheSet(cacheKey, data, 15);
     return { ok: true, data };
+  });
+
+  // GET /txs/:hash/internal — internal transactions (from debug_traceTransaction)
+  app.get('/:hash/internal', async (request, reply) => {
+    const { hash } = request.params as { hash: string };
+    const items = await getInternalTxsByTxHash(hash);
+    if (items.length === 0) {
+      // Check if the parent tx exists at all
+      const tx = await getTransactionByHash(hash);
+      if (!tx) {
+        reply.status(404);
+        return { ok: false, error: 'Transaction not found' };
+      }
+    }
+    return { ok: true, data: { tx_hash: hash, items, total: items.length } };
   });
 }

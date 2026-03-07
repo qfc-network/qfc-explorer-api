@@ -3,6 +3,7 @@ import {
   getAddressOverview, getAddressStats, getAddressAnalysis,
   getContractByAddress, getTokenHoldingsByAddress, getNftHoldingsByAddress,
   getAddressTransactions, getTokenTransfersByAddress,
+  getInternalTxsByAddress,
 } from '../db/queries.js';
 import { clamp, parseNumber, parseOrder } from '../lib/pagination.js';
 
@@ -28,9 +29,12 @@ export default async function addressesRoutes(app: FastifyInstance) {
 
     let transactions = null;
     let tokenTransfers = null;
+    let internalTxs = null;
 
     if (tab === 'token_transfers') {
       tokenTransfers = await getTokenTransfersByAddress(address, limit, offset, order);
+    } else if (tab === 'internal_txs') {
+      internalTxs = await getInternalTxsByAddress(address, limit, offset, order);
     } else {
       transactions = await getAddressTransactions(address, limit, offset, order);
     }
@@ -40,7 +44,7 @@ export default async function addressesRoutes(app: FastifyInstance) {
       data: {
         address, overview, stats, analysis, contract,
         tokenHoldings, nftHoldings,
-        tab, page, limit, order, transactions, tokenTransfers,
+        tab, page, limit, order, transactions, tokenTransfers, internalTxs,
       },
     };
   });

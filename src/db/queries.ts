@@ -459,6 +459,52 @@ export async function searchTokensByName(query: string, limit: number) {
   return result.rows;
 }
 
+// --- Internal Transactions ---
+
+export async function getInternalTxsByTxHash(txHash: string) {
+  const pool = getReadPool();
+  const result = await pool.query(
+    `SELECT tx_hash, block_height, trace_index, call_type, depth,
+            from_address, to_address, value, gas, gas_used, error
+     FROM internal_transactions WHERE tx_hash = $1
+     ORDER BY trace_index ASC`,
+    [txHash]
+  );
+  return result.rows;
+}
+
+export async function getInternalTxsByAddress(
+  address: string, limit: number, offset: number, order: 'asc' | 'desc' = 'desc'
+) {
+  const pool = getReadPool();
+  const direction = order === 'asc' ? 'ASC' : 'DESC';
+  const result = await pool.query(
+    `SELECT tx_hash, block_height, trace_index, call_type, depth,
+            from_address, to_address, value, gas, gas_used, error
+     FROM internal_transactions
+     WHERE from_address = $1 OR to_address = $1
+     ORDER BY block_height ${direction}, trace_index ASC
+     LIMIT $2 OFFSET $3`,
+    [address, limit, offset]
+  );
+  return result.rows;
+}
+
+export async function getInternalTxsByBlock(
+  blockHeight: string, limit: number, offset: number
+) {
+  const pool = getReadPool();
+  const result = await pool.query(
+    `SELECT tx_hash, trace_index, call_type, depth,
+            from_address, to_address, value, gas, gas_used, error
+     FROM internal_transactions WHERE block_height = $1
+     ORDER BY trace_index ASC
+     LIMIT $2 OFFSET $3`,
+    [blockHeight, limit, offset]
+  );
+  return result.rows;
+}
+
 export async function searchContractsByName(query: string, limit: number) {
   const pool = getReadPool();
   const result = await pool.query(

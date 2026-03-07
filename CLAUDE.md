@@ -27,9 +27,9 @@ npm run typecheck    # TypeScript check (tsc --noEmit)
 src/
   server.ts              # Fastify entry point, plugin registration, graceful shutdown
   routes/
-    blocks.ts            # GET /blocks, GET /blocks/:height
-    transactions.ts      # GET /txs, GET /txs/:hash (DB + RPC fallback)
-    addresses.ts         # GET /address/:address (overview, stats, txs, tokens, NFTs)
+    blocks.ts            # GET /blocks, GET /blocks/:height, GET /blocks/:height/internal
+    transactions.ts      # GET /txs, GET /txs/:hash (DB + RPC fallback), GET /txs/:hash/internal
+    addresses.ts         # GET /address/:address (overview, stats, txs, tokens, NFTs, internal_txs tab)
     contracts.ts         # GET /contract/:address, POST /contract/call, POST /contract/verify
                          # GET /contract (list), GET /contract/verified (leaderboard)
     tokens.ts            # GET /tokens, GET /tokens/:address, GET /tokens/:address/holders

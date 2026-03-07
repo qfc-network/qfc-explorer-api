@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { getBlocksPage, getBlockByHeight, getTransactionsByBlockHeight } from '../db/queries.js';
+import { getBlocksPage, getBlockByHeight, getTransactionsByBlockHeight, getInternalTxsByBlock } from '../db/queries.js';
 import { clamp, parseNumber, parseOrder } from '../lib/pagination.js';
 import { cached } from '../lib/cache.js';
 
@@ -43,5 +43,23 @@ export default async function blocksRoutes(app: FastifyInstance) {
       return { ok: false, error: 'Block not found' };
     }
     return { ok: true, data };
+  });
+
+  // GET /blocks/:height/internal — internal transactions in a block
+  app.get('/:height/internal', async (request, reply) => {
+    const { height } = request.params as { height: string };
+    const q = request.query as Record<string, string>;
+    const page = parseNumber(q.page, 1);
+    const limit = clamp(parseNumber(q.limit, 25), 1, 100);
+    const offset = (page - 1) * limit;
+
+    const block = await getBlockByHeight(height);
+    if (!block) {
+      reply.status(404);
+      return { ok: false, error: 'Block not found' };
+    }
+
+    const items = await getInternalTxsByBlock(height, limit, offset);
+    return { ok: true, data: { block_height: height, page, limit, items, total: items.length } };
   });
 }
