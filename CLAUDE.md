@@ -56,9 +56,14 @@ src/
     metrics.ts           # Prometheus histogram/counter/gauge registration + /metrics endpoint
     metrics-updater.ts   # Background timer updating blockchain gauges every 15s
   indexer/
-    index.ts             # Main indexer entry point (block processing, continuous polling)
-    rpc.ts               # RpcClient with retry logic (separate from lib/rpc.ts)
-    types.ts             # RPC response types (RpcBlock, RpcTransaction, RpcReceipt, RpcLog)
+    index.ts             # Orchestrator: main loop, admin commands, pipeline coordination
+    block.ts             # Block processor: blocks, txs, accounts, receipts/events, balances
+    token.ts             # Token processor: ERC-20/721/1155 transfers, metadata, balances
+    contract.ts          # Contract processor: creation detection, code_hash, account upsert
+    internal-tx.ts       # Internal tx processor: debug_traceTransaction → internal_transactions
+    state.ts             # Shared indexer_state helpers (height, stats, admin commands, daily stats)
+    rpc.ts               # RpcClient with retry logic
+    types.ts             # RPC types (block, tx, receipt, log, trace)
     utils.ts             # Hex/buffer/decode utilities
     qfc.ts               # QFC-specific RPC types (validators, epoch, inference, governance)
     __tests__/            # Indexer unit tests
@@ -74,6 +79,7 @@ Shares the same PostgreSQL database and schema as qfc-explorer. Key tables:
 - `tokens` — ERC-20/721/1155 token metadata
 - `token_transfers` — token transfer history
 - `token_balances` — current holder balances
+- `internal_transactions` — internal calls from debug_traceTransaction (CALL, CREATE, etc.)
 - `daily_stats` — pre-aggregated daily metrics for charts
 - `indexer_state` — indexer progress tracking (last_processed_height, etc.)
 
@@ -103,11 +109,17 @@ and writes blocks, transactions, receipts, events, accounts, tokens, and token t
 
 - Run separately from the API server (same image, different command)
 - Docker: `command: ["node", "dist/indexer/index.js"]`
-- Processes blocks sequentially, receipts in batches of 8 concurrently
-- Tracks ERC-20/721/1155 token transfers and updates `token_balances` incrementally
-- Fetches token metadata (name, symbol, decimals) on first transfer detection
-- Admin commands via `indexer_state` table: rescan from height, retry failed blocks
-- Refreshes `daily_stats` table after each batch
+
+Pipeline per block (sequential):
+1. **Block** — fetch block + txs from RPC, upsert blocks/txs/accounts/events, refresh balances
+2. **Token + Contract** — run in parallel:
+   - Token: detect ERC-20/721/1155 transfers, upsert tokens/transfers/balances, fetch metadata
+   - Contract: detect creations, compute code_hash (SHA-256), upsert accounts
+3. **Internal Tx** — `debug_traceTransaction` with callTracer, flatten nested calls, upsert `internal_transactions`
+   (graceful: skipped silently if trace API unavailable)
+
+Admin commands via `indexer_state` table: rescan from height, retry failed blocks.
+Refreshes `daily_stats` table after each batch.
 
 ## QFC-Specific Notes
 - **EVM version**: QFC does NOT support PUSH0. Always `evmVersion: "paris"`.

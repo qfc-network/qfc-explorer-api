@@ -53,3 +53,17 @@ export type RpcLog = {
   transactionIndex?: string | null;
   logIndex?: string | null;
 };
+
+// debug_traceTransaction callTracer result
+export type TraceCall = {
+  type: string;       // CALL, STATICCALL, DELEGATECALL, CREATE, CREATE2, SELFDESTRUCT
+  from: string;
+  to?: string;
+  value?: string;     // hex
+  gas?: string;       // hex
+  gasUsed?: string;   // hex
+  input?: string;
+  output?: string;
+  error?: string;
+  calls?: TraceCall[];
+};
