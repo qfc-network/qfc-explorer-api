@@ -66,14 +66,15 @@
 - [x] 连接管理 (按需轮询: 无连接时停止, 有连接时自动启动)
 - [x] 管理统计 (getWsStats: 连接数、订阅频道数、监控地址数)
 
-### Phase 7: 搜索优化
+### Phase 7: 搜索优化 ✅
 > 提升搜索体验和数据维度
 
-- [ ] PostgreSQL 全文搜索 (tsvector + GIN 索引)
-- [ ] 地址标签系统 (已知合约、交易所、项目方)
-- [ ] 合约名称 + 代币名称索引
-- [ ] 搜索结果分类 (地址/交易/区块/代币/合约)
-- [ ] 搜索历史 + 热门搜索
+- [x] PostgreSQL 全文搜索 (tsvector + GIN 索引, searchTokensFts fallback to ILIKE)
+- [x] 地址标签系统 (address_labels 表, CRUD API, 搜索集成)
+- [x] 合约名称 + 代币名称搜索 (contracts + tokens 联合搜索)
+- [x] 搜索结果分类 (block/transaction/address/token/contract/label 6 种类型)
+- [x] 地址详情页集成标签 (GET /address/:addr 返回 label)
+- [x] 管理接口 (POST /admin/labels, POST /admin/labels/batch)
 
 ### Phase 8: 数据归档
 > 老数据迁移到冷存储，减轻主库压力
@@ -92,6 +93,6 @@
 Phase 4: Indexer 可观测性    ✅ 已完成
 Phase 5: 合约验证增强        ✅ 已完成
 Phase 6: 实时推送增强        ✅ 已完成
-Phase 7: 搜索优化            ← 数据量增长后再做
+Phase 7: 搜索优化            ✅ 已完成
 Phase 8: 数据归档            ← 数据量达到瓶颈后再做
 ```

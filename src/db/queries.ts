@@ -516,3 +516,69 @@ export async function searchContractsByName(query: string, limit: number) {
   );
   return result.rows;
 }
+
+// --- Address Labels ---
+
+export async function getAddressLabel(address: string) {
+  const pool = getReadPool();
+  const result = await pool.query(
+    'SELECT address, label, category, description, website FROM address_labels WHERE address = $1 LIMIT 1',
+    [address.toLowerCase()]
+  );
+  return result.rows[0] || null;
+}
+
+export async function getAddressLabels(addresses: string[]) {
+  if (addresses.length === 0) return [];
+  const pool = getReadPool();
+  const placeholders = addresses.map((_, i) => `$${i + 1}`).join(',');
+  const result = await pool.query(
+    `SELECT address, label, category FROM address_labels WHERE address IN (${placeholders})`,
+    addresses.map((a) => a.toLowerCase())
+  );
+  return result.rows;
+}
+
+export async function searchAddressLabels(query: string, limit: number) {
+  const pool = getReadPool();
+  const result = await pool.query(
+    `SELECT address, label, category FROM address_labels
+     WHERE to_tsvector('simple', label) @@ plainto_tsquery('simple', $1)
+        OR label ILIKE $2
+     ORDER BY label ASC LIMIT $3`,
+    [query, `%${query}%`, limit]
+  );
+  return result.rows;
+}
+
+export async function upsertAddressLabel(
+  address: string, label: string, category?: string, description?: string, website?: string
+) {
+  const pool = getReadPool();
+  await pool.query(
+    `INSERT INTO address_labels (address, label, category, description, website)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (address) DO UPDATE SET
+       label = EXCLUDED.label, category = EXCLUDED.category,
+       description = EXCLUDED.description, website = EXCLUDED.website,
+       updated_at = NOW()`,
+    [address.toLowerCase(), label, category || null, description || null, website || null]
+  );
+}
+
+// --- Full-text Search ---
+
+export async function searchTokensFts(query: string, limit: number) {
+  const pool = getReadPool();
+  const result = await pool.query(
+    `SELECT address, name, symbol, token_type,
+            ts_rank(to_tsvector('simple', coalesce(name, '') || ' ' || coalesce(symbol, '')),
+                    plainto_tsquery('simple', $1)) AS rank
+     FROM tokens
+     WHERE to_tsvector('simple', coalesce(name, '') || ' ' || coalesce(symbol, ''))
+           @@ plainto_tsquery('simple', $1)
+     ORDER BY rank DESC LIMIT $2`,
+    [query, limit]
+  );
+  return result.rows;
+}

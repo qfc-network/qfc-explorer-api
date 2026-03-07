@@ -3,7 +3,7 @@ import {
   getAddressOverview, getAddressStats, getAddressAnalysis,
   getContractByAddress, getTokenHoldingsByAddress, getNftHoldingsByAddress,
   getAddressTransactions, getTokenTransfersByAddress,
-  getInternalTxsByAddress,
+  getInternalTxsByAddress, getAddressLabel,
 } from '../db/queries.js';
 import { clamp, parseNumber, parseOrder } from '../lib/pagination.js';
 
@@ -18,13 +18,14 @@ export default async function addressesRoutes(app: FastifyInstance) {
     const order = parseOrder(q.order);
     const offset = (page - 1) * limit;
 
-    const [overview, stats, analysis, contract, tokenHoldings, nftHoldings] = await Promise.all([
+    const [overview, stats, analysis, contract, tokenHoldings, nftHoldings, label] = await Promise.all([
       getAddressOverview(address),
       getAddressStats(address),
       getAddressAnalysis(address),
       getContractByAddress(address),
       getTokenHoldingsByAddress(address),
       getNftHoldingsByAddress(address),
+      getAddressLabel(address),
     ]);
 
     let transactions = null;
@@ -42,7 +43,7 @@ export default async function addressesRoutes(app: FastifyInstance) {
     return {
       ok: true,
       data: {
-        address, overview, stats, analysis, contract,
+        address, label, overview, stats, analysis, contract,
         tokenHoldings, nftHoldings,
         tab, page, limit, order, transactions, tokenTransfers, internalTxs,
       },

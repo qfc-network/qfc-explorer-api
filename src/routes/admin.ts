@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { getPool, getReadPool } from '../db/pool.js';
 import { getRateLimitStats, getConfig } from '../lib/rate-limit.js';
+import { upsertAddressLabel } from '../db/queries.js';
 
 export default async function adminRoutes(app: FastifyInstance) {
   // GET /admin/db
@@ -65,6 +66,42 @@ export default async function adminRoutes(app: FastifyInstance) {
        ON CONFLICT (key) DO UPDATE SET value = 'true', updated_at = NOW()`
     );
     return { ok: true, data: { accepted: true } };
+  });
+
+  // POST /admin/labels — upsert address label
+  app.post('/labels', async (request, reply) => {
+    const body = request.body as {
+      address: string;
+      label: string;
+      category?: string;
+      description?: string;
+      website?: string;
+    };
+    if (!body.address || !body.label) {
+      reply.status(400);
+      return { ok: false, error: 'Missing address or label' };
+    }
+    if (!/^0x[a-fA-F0-9]{40}$/.test(body.address)) {
+      reply.status(400);
+      return { ok: false, error: 'Invalid address format' };
+    }
+    await upsertAddressLabel(body.address, body.label, body.category, body.description, body.website);
+    return { ok: true, data: { address: body.address.toLowerCase(), label: body.label } };
+  });
+
+  // POST /admin/labels/batch — bulk upsert address labels
+  app.post('/labels/batch', async (request, reply) => {
+    const body = request.body as Array<{
+      address: string; label: string; category?: string;
+    }>;
+    if (!Array.isArray(body) || body.length === 0) {
+      reply.status(400);
+      return { ok: false, error: 'Expected non-empty array of labels' };
+    }
+    for (const item of body) {
+      await upsertAddressLabel(item.address, item.label, item.category);
+    }
+    return { ok: true, data: { count: body.length } };
   });
 
   // GET /admin/rate-limit

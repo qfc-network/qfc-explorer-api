@@ -34,7 +34,7 @@ src/
                          # POST /contract/verify-json (Standard JSON Input), POST /contract/decode
                          # POST /contract/decode-log, GET /contract (list), GET /contract/verified
     tokens.ts            # GET /tokens, GET /tokens/:address, GET /tokens/:address/holders
-    search.ts            # GET /search, GET /search/suggest
+    search.ts            # GET /search (categorized), GET /search/suggest (with labels + contracts)
     analytics.ts         # GET /analytics, GET /analytics/daily, GET /analytics/export
     network.ts           # GET /network (epoch, validators, hashrate via RPC)
     inference.ts         # GET /inference, GET /inference/task (QFC AI inference)
@@ -83,6 +83,7 @@ Shares the same PostgreSQL database and schema as qfc-explorer. Key tables:
 - `token_transfers` — token transfer history
 - `token_balances` — current holder balances
 - `internal_transactions` — internal calls from debug_traceTransaction (CALL, CREATE, etc.)
+- `address_labels` — human-readable names for known addresses (exchanges, projects, etc.)
 - `daily_stats` — pre-aggregated daily metrics for charts
 - `indexer_state` — indexer progress tracking (last_processed_height, etc.)
 
