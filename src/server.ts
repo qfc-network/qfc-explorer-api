@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { registerMetrics } from './middleware/metrics.js';
 import { closePool } from './db/pool.js';
+import { closeRedis } from './lib/cache.js';
 import { startMetricsUpdater } from './middleware/metrics-updater.js';
 
 import blocksRoutes from './routes/blocks.js';
@@ -63,6 +64,7 @@ await app.register(toolsRoutes, { prefix: '/tools' });
 const shutdown = async () => {
   app.log.info('Shutting down...');
   await app.close();
+  await closeRedis();
   await closePool();
   process.exit(0);
 };

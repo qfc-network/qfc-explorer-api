@@ -1,9 +1,11 @@
 import { FastifyInstance } from 'fastify';
 import { getPool } from '../db/pool.js';
+import { cached } from '../lib/cache.js';
 
 export default async function leaderboardRoutes(app: FastifyInstance) {
   // GET /leaderboard
   app.get('/', async () => {
+    const data = await cached('leaderboard', 60, async () => {
     const pool = getPool();
     const [topBalances, mostActive, topValidators, topContracts] = await Promise.all([
       pool.query(`
@@ -36,13 +38,12 @@ export default async function leaderboardRoutes(app: FastifyInstance) {
     ]);
 
     return {
-      ok: true,
-      data: {
         topBalances: topBalances.rows,
         mostActive: mostActive.rows,
         topValidators: topValidators.rows,
         topContracts: topContracts.rows,
-      },
-    };
+      };
+    });
+    return { ok: true, data };
   });
 }

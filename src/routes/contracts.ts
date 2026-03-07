@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { getPool } from '../db/pool.js';
 import { rpcCall, rpcCallSafe } from '../lib/rpc.js';
 import { clamp, parseNumber } from '../lib/pagination.js';
+import { cached, cacheGet, cacheSet } from '../lib/cache.js';
 
 // EIP-1967 / EIP-1822 storage slots
 const EIP1967_IMPL_SLOT = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc';
@@ -45,6 +46,10 @@ export default async function contractsRoutes(app: FastifyInstance) {
       return { ok: false, error: 'Invalid address format' };
     }
 
+    const cacheKey = `contract:${address.toLowerCase()}`;
+    const hit = await cacheGet(cacheKey);
+    if (hit) return { ok: true, data: hit };
+
     const pool = getPool();
 
     // RPC calls
@@ -80,9 +85,7 @@ export default async function contractsRoutes(app: FastifyInstance) {
       similar_contracts = simResult.rows;
     }
 
-    return {
-      ok: true,
-      data: {
+    const data = {
         address,
         code: code || '0x',
         balance: balance ? BigInt(balance).toString() : '0',
@@ -99,8 +102,9 @@ export default async function contractsRoutes(app: FastifyInstance) {
         verified_at: contract?.verified_at ?? null,
         similar_contracts,
         ...proxy,
-      },
     };
+    await cacheSet(cacheKey, data, 30);
+    return { ok: true, data };
   });
 
   // POST /contract/call — read-only contract call
@@ -206,6 +210,7 @@ export default async function contractsRoutes(app: FastifyInstance) {
 
   // GET /contract/verified — top verified contracts
   app.get('/verified', async () => {
+    const data = await cached('contracts:verified', 60, async () => {
     const pool = getPool();
     const result = await pool.query(`
       SELECT c.address, c.creator_tx_hash, c.created_at_block, c.compiler_version, c.verified_at,
@@ -219,7 +224,9 @@ export default async function contractsRoutes(app: FastifyInstance) {
       LIMIT 50
     `);
     const total = await pool.query('SELECT COUNT(*) AS c FROM contracts WHERE is_verified = true');
-    return { ok: true, data: { items: result.rows, total: Number(total.rows[0].c) } };
+    return { items: result.rows, total: Number(total.rows[0].c) };
+    });
+    return { ok: true, data };
   });
 
   // POST /contract/verify — source code verification

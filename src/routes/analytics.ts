@@ -2,10 +2,12 @@ import { FastifyInstance } from 'fastify';
 import { getPool } from '../db/pool.js';
 import { getDailyStats } from '../db/queries.js';
 import { clamp, parseNumber } from '../lib/pagination.js';
+import { cached } from '../lib/cache.js';
 
 export default async function analyticsRoutes(app: FastifyInstance) {
   // GET /analytics — network overview
   app.get('/', async () => {
+    const data = await cached('analytics:overview', 30, async () => {
     const pool = getPool();
 
     const [totals, blockSeries, validatorStats] = await Promise.all([
@@ -60,15 +62,20 @@ export default async function analyticsRoutes(app: FastifyInstance) {
       })),
     };
 
-    return { ok: true, data: { overview, series, validators: validatorStats.rows } };
+    return { overview, series, validators: validatorStats.rows };
+    });
+    return { ok: true, data };
   });
 
   // GET /analytics/daily
   app.get('/daily', async (request) => {
     const q = request.query as Record<string, string>;
     const days = clamp(parseNumber(q.days, 30), 1, 365);
-    const stats = await getDailyStats(days);
-    return { ok: true, data: { days, stats } };
+    const data = await cached(`analytics:daily:${days}`, 60, async () => {
+      const stats = await getDailyStats(days);
+      return { days, stats };
+    });
+    return { ok: true, data };
   });
 
   // GET /analytics/export
