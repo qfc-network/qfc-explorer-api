@@ -43,6 +43,7 @@ src/
     stream.ts            # GET /stream (SSE real-time stats)
     ws.ts                # GET /ws (WebSocket subscriptions: blocks, txs, stats, address)
     admin.ts             # GET /admin/db, GET /admin/indexer, POST /admin/indexer/rescan
+                         # GET /admin/archive, POST /admin/archive (cold storage)
     health.ts            # GET /health (DB + RPC + indexer lag check)
     tools.ts             # GET /tools/keccak256
   db/
@@ -52,6 +53,7 @@ src/
   lib/
     rpc.ts               # Centralized RPC client (rpcCall / rpcCallSafe)
     abi-decoder.ts       # ABI decoding (function calldata + event logs from verified contracts)
+    archive.ts           # Data archival (move old partitions to archive schema, fallback queries)
     pagination.ts        # Query param parsing (parseNumber, clamp, parseOrder)
     format.ts            # Formatting utilities (shortenHash, formatWeiToQfc)
     rate-limit.ts        # In-memory rate limiter (100 req/min/IP)

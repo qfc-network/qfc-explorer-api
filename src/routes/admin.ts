@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { getPool, getReadPool } from '../db/pool.js';
 import { getRateLimitStats, getConfig } from '../lib/rate-limit.js';
 import { upsertAddressLabel } from '../db/queries.js';
+import { archiveBelow, getArchiveStatus } from '../lib/archive.js';
 
 export default async function adminRoutes(app: FastifyInstance) {
   // GET /admin/db
@@ -102,6 +103,37 @@ export default async function adminRoutes(app: FastifyInstance) {
       await upsertAddressLabel(item.address, item.label, item.category);
     }
     return { ok: true, data: { count: body.length } };
+  });
+
+  // GET /admin/archive — archive status
+  app.get('/archive', async () => {
+    try {
+      const status = await getArchiveStatus();
+      return { ok: true, data: status };
+    } catch (error) {
+      return { ok: true, data: { threshold: '0', tables: [], recentOperations: [], note: 'Archive schema not yet created — run migration 004_archive.sql' } };
+    }
+  });
+
+  // POST /admin/archive — trigger archival of old data
+  app.post('/archive', async (request, reply) => {
+    const body = request.body as { belowHeight: number };
+    if (!body.belowHeight || !Number.isFinite(body.belowHeight) || body.belowHeight < 1_000_000) {
+      reply.status(400);
+      return { ok: false, error: 'belowHeight must be >= 1000000 (one full partition)' };
+    }
+
+    const results = await archiveBelow(body.belowHeight);
+    const totalRows = results.reduce((sum, r) => sum + r.rowCount, 0);
+    return {
+      ok: true,
+      data: {
+        belowHeight: body.belowHeight,
+        partitionsArchived: results.length,
+        totalRowsMoved: totalRows,
+        details: results,
+      },
+    };
   });
 
   // GET /admin/rate-limit

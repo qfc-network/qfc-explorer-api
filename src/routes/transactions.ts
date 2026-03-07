@@ -8,6 +8,7 @@ import { clamp, parseNumber, parseOrder } from '../lib/pagination.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getReadPool } from '../db/pool.js';
 import { decodeFunction, decodeEvent, getContractAbi } from '../lib/abi-decoder.js';
+import { queryArchiveTransactionByHash, queryArchiveEventsByTxHash, queryArchiveInternalTxsByTxHash } from '../lib/archive.js';
 
 export default async function transactionsRoutes(app: FastifyInstance) {
   // GET /txs — paginated list
@@ -79,6 +80,19 @@ export default async function transactionsRoutes(app: FastifyInstance) {
       return { ok: true, data };
     }
 
+    // Fallback to archive (cold storage)
+    try {
+      const archiveTx = await queryArchiveTransactionByHash(hash);
+      if (archiveTx) {
+        const archiveLogs = await queryArchiveEventsByTxHash(hash);
+        const data = { transaction: archiveTx, logs: archiveLogs, decoded_logs: null, source: 'archive' as const };
+        await cacheSet(cacheKey, data, 300); // longer TTL for archived data
+        return { ok: true, data };
+      }
+    } catch {
+      // archive schema may not exist yet, skip
+    }
+
     // Fallback to RPC
     const rpcTx = await rpcCallSafe<Record<string, string>>('eth_getTransactionByHash', [hash]);
     if (!rpcTx) {
@@ -113,9 +127,16 @@ export default async function transactionsRoutes(app: FastifyInstance) {
   // GET /txs/:hash/internal — internal transactions (from debug_traceTransaction)
   app.get('/:hash/internal', async (request, reply) => {
     const { hash } = request.params as { hash: string };
-    const items = await getInternalTxsByTxHash(hash);
+    let items = await getInternalTxsByTxHash(hash);
+
+    // Fallback to archive if not found in hot tables
     if (items.length === 0) {
-      // Check if the parent tx exists at all
+      try {
+        items = await queryArchiveInternalTxsByTxHash(hash);
+      } catch { /* archive schema may not exist */ }
+    }
+
+    if (items.length === 0) {
       const tx = await getTransactionByHash(hash);
       if (!tx) {
         reply.status(404);

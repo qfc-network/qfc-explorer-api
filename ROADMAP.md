@@ -76,14 +76,16 @@
 - [x] 地址详情页集成标签 (GET /address/:addr 返回 label)
 - [x] 管理接口 (POST /admin/labels, POST /admin/labels/batch)
 
-### Phase 8: 数据归档
+### Phase 8: 数据归档 ✅
 > 老数据迁移到冷存储，减轻主库压力
 
-- [ ] 归档策略设计 (按 block_height 阈值)
-- [ ] 归档表 (archive_transactions, archive_events)
-- [ ] 自动迁移脚本 (定时任务)
-- [ ] 查询层透明回退 (主表 → 归档表)
-- [ ] 归档数据压缩 + 外部存储 (S3/MinIO)
+- [x] 归档策略设计 (按 block_height 阈值, 1M blocks/partition 粒度)
+- [x] 归档 schema + 表 (archive.transactions/events/token_transfers/internal_transactions)
+- [x] archive_log 元数据追踪 (表名、分区、行数、时间)
+- [x] 归档服务 (archivePartition, archiveBelow)
+- [x] 查询层透明回退 (热表 → archive 表 → RPC)
+- [x] 管理接口 (GET /admin/archive 状态, POST /admin/archive 触发归档)
+- [ ] 外部存储导出 (S3/MinIO — 预留 storage_path 字段, 需要时再实现)
 
 ---
 
@@ -94,5 +96,5 @@ Phase 4: Indexer 可观测性    ✅ 已完成
 Phase 5: 合约验证增强        ✅ 已完成
 Phase 6: 实时推送增强        ✅ 已完成
 Phase 7: 搜索优化            ✅ 已完成
-Phase 8: 数据归档            ← 数据量达到瓶颈后再做
+Phase 8: 数据归档            ✅ 已完成
 ```
