@@ -539,6 +539,15 @@ export async function getAddressLabels(addresses: string[]) {
   return result.rows;
 }
 
+export async function listAddressLabels(limit: number) {
+  const pool = getReadPool();
+  const result = await pool.query(
+    `SELECT address, label, category, description, website, created_at FROM address_labels ORDER BY created_at DESC LIMIT $1`,
+    [limit]
+  );
+  return result.rows;
+}
+
 export async function searchAddressLabels(query: string, limit: number) {
   const pool = getReadPool();
   const result = await pool.query(

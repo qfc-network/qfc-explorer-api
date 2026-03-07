@@ -1,8 +1,10 @@
 import { FastifyInstance } from 'fastify';
 import { getPool, getReadPool } from '../db/pool.js';
 import { getRateLimitStats, getConfig } from '../lib/rate-limit.js';
-import { upsertAddressLabel } from '../db/queries.js';
+import { upsertAddressLabel, listAddressLabels, searchAddressLabels } from '../db/queries.js';
 import { archiveBelow, getArchiveStatus } from '../lib/archive.js';
+import { getWsStats } from './ws.js';
+import { getRedisConfig } from '../lib/cache.js';
 
 export default async function adminRoutes(app: FastifyInstance) {
   // GET /admin/db
@@ -134,6 +136,28 @@ export default async function adminRoutes(app: FastifyInstance) {
         details: results,
       },
     };
+  });
+
+  // GET /admin/labels — list address labels
+  app.get('/labels', async (request) => {
+    const { q, limit } = request.query as { q?: string; limit?: string };
+    const max = Math.min(Number(limit) || 50, 200);
+    if (q) {
+      const labels = await searchAddressLabels(q, max);
+      return { ok: true, data: { labels } };
+    }
+    const labels = await listAddressLabels(max);
+    return { ok: true, data: { labels } };
+  });
+
+  // GET /admin/ws — WebSocket connection stats
+  app.get('/ws', async () => {
+    return { ok: true, data: getWsStats() };
+  });
+
+  // GET /admin/redis — Redis config and status
+  app.get('/redis', async () => {
+    return { ok: true, data: getRedisConfig() };
   });
 
   // GET /admin/rate-limit
