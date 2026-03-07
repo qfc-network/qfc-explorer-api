@@ -36,6 +36,7 @@ async function upsertBlock(client: PoolClient, block: RpcBlock): Promise<void> {
        timestamp_ms = EXCLUDED.timestamp_ms, gas_limit = EXCLUDED.gas_limit,
        gas_used = EXCLUDED.gas_used, extra_data = EXCLUDED.extra_data,
        tx_count = EXCLUDED.tx_count`,
+    // blocks table is NOT partitioned — PK remains (hash)
     [
       block.hash, height.toString(10), block.parentHash, block.stateRoot,
       block.transactionsRoot, block.receiptsRoot, block.miner,
@@ -75,8 +76,8 @@ async function bulkUpsertTransactions(
        hash, block_hash, block_height, tx_index, type,
        from_address, to_address, value, nonce, gas_limit, gas_price, status, data
      ) VALUES ${values.join(',')}
-     ON CONFLICT (hash) DO UPDATE SET
-       block_hash = EXCLUDED.block_hash, block_height = EXCLUDED.block_height,
+     ON CONFLICT (hash, block_height) DO UPDATE SET
+       block_hash = EXCLUDED.block_hash,
        tx_index = EXCLUDED.tx_index, from_address = EXCLUDED.from_address,
        to_address = EXCLUDED.to_address, value = EXCLUDED.value,
        nonce = EXCLUDED.nonce, gas_limit = EXCLUDED.gas_limit,
@@ -159,8 +160,8 @@ async function bulkUpsertEvents(
          tx_hash, block_height, log_index, contract_address,
          topic0, topic1, topic2, topic3, data
        ) VALUES ${logValues.join(',')}
-       ON CONFLICT (tx_hash, log_index) DO UPDATE SET
-         block_height = EXCLUDED.block_height, contract_address = EXCLUDED.contract_address,
+       ON CONFLICT (tx_hash, log_index, block_height) DO UPDATE SET
+         contract_address = EXCLUDED.contract_address,
          topic0 = EXCLUDED.topic0, topic1 = EXCLUDED.topic1,
          topic2 = EXCLUDED.topic2, topic3 = EXCLUDED.topic3,
          data = EXCLUDED.data`,

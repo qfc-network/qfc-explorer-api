@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { getPool } from '../db/pool.js';
+import { getReadPool } from '../db/pool.js';
 import { getDailyStats } from '../db/queries.js';
 import { clamp, parseNumber } from '../lib/pagination.js';
 import { cached } from '../lib/cache.js';
@@ -8,7 +8,7 @@ export default async function analyticsRoutes(app: FastifyInstance) {
   // GET /analytics — network overview
   app.get('/', async () => {
     const data = await cached('analytics:overview', 30, async () => {
-    const pool = getPool();
+    const pool = getReadPool();
 
     const [totals, blockSeries, validatorStats] = await Promise.all([
       pool.query(`
@@ -83,7 +83,7 @@ export default async function analyticsRoutes(app: FastifyInstance) {
     const q = request.query as Record<string, string>;
     const type = q.type || 'tps';
     const format = q.format || 'json';
-    const pool = getPool();
+    const pool = getReadPool();
 
     let rows: Record<string, unknown>[] = [];
     let headers: string[] = [];

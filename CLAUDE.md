@@ -138,8 +138,10 @@ Refreshes `daily_stats` table after each batch.
 ## Environment Variables
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DATABASE_URL` | — | PostgreSQL connection string (required) |
-| `RPC_URL` | `http://127.0.0.1:8545` | QFC node RPC endpoint |
+| `DATABASE_URL` | — | PostgreSQL primary connection string (required) |
+| `DATABASE_REPLICA_URL` | — | PostgreSQL read replica (optional, API reads go here) |
+| `RPC_URL` | `http://127.0.0.1:8545` | QFC node RPC endpoint(s), comma-separated for multi-node |
+| `RPC_ARCHIVE_URL` | — | Archive node for debug_traceTransaction (optional) |
 | `PORT` | `3001` | API server port |
 | `HOST` | `0.0.0.0` | Bind address |
 | `CORS_ORIGIN` | `*` | Allowed CORS origins |

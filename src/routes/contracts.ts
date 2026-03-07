@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { getPool } from '../db/pool.js';
+import { getPool, getReadPool } from '../db/pool.js';
 import { rpcCall, rpcCallSafe } from '../lib/rpc.js';
 import { clamp, parseNumber } from '../lib/pagination.js';
 import { cached, cacheGet, cacheSet } from '../lib/cache.js';
@@ -50,7 +50,7 @@ export default async function contractsRoutes(app: FastifyInstance) {
     const hit = await cacheGet(cacheKey);
     if (hit) return { ok: true, data: hit };
 
-    const pool = getPool();
+    const pool = getReadPool();
 
     // RPC calls
     const [code, balance, nonce] = await Promise.all([
@@ -192,7 +192,7 @@ export default async function contractsRoutes(app: FastifyInstance) {
     const q = request.query as Record<string, string>;
     const limit = clamp(parseNumber(q.limit, 25), 1, 100);
     const offset = parseNumber(q.offset, 0);
-    const pool = getPool();
+    const pool = getReadPool();
     const [items, total] = await Promise.all([
       pool.query(
         `SELECT address, creator_tx_hash, created_at_block, is_verified
@@ -211,7 +211,7 @@ export default async function contractsRoutes(app: FastifyInstance) {
   // GET /contract/verified — top verified contracts
   app.get('/verified', async () => {
     const data = await cached('contracts:verified', 60, async () => {
-    const pool = getPool();
+    const pool = getReadPool();
     const result = await pool.query(`
       SELECT c.address, c.creator_tx_hash, c.created_at_block, c.compiler_version, c.verified_at,
              t.name AS token_name, t.symbol AS token_symbol,

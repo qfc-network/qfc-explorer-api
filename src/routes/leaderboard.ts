@@ -1,12 +1,12 @@
 import { FastifyInstance } from 'fastify';
-import { getPool } from '../db/pool.js';
+import { getReadPool } from '../db/pool.js';
 import { cached } from '../lib/cache.js';
 
 export default async function leaderboardRoutes(app: FastifyInstance) {
   // GET /leaderboard
   app.get('/', async () => {
     const data = await cached('leaderboard', 60, async () => {
-    const pool = getPool();
+    const pool = getReadPool();
     const [topBalances, mostActive, topValidators, topContracts] = await Promise.all([
       pool.query(`
         SELECT address, balance, nonce, last_seen_block

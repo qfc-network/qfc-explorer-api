@@ -76,7 +76,7 @@ export async function processInternalTxs(rpc: RpcClient, result: BlockResult): P
     const traces = await Promise.all(
       batch.map(async (tx) => {
         try {
-          const trace = await rpc.callWithRetry<TraceCall>(
+          const trace = await rpc.callArchiveWithRetry<TraceCall>(
             'debug_traceTransaction',
             [tx.hash, { tracer: 'callTracer', tracerConfig: { onlyTopCall: false } }]
           );
@@ -129,8 +129,8 @@ export async function processInternalTxs(rpc: RpcClient, result: BlockResult): P
          depth, from_address, to_address, value,
          gas, gas_used, input, output, error
        ) VALUES ${values.join(',')}
-       ON CONFLICT (tx_hash, trace_index) DO UPDATE SET
-         block_height = EXCLUDED.block_height, call_type = EXCLUDED.call_type,
+       ON CONFLICT (tx_hash, trace_index, block_height) DO UPDATE SET
+         call_type = EXCLUDED.call_type,
          depth = EXCLUDED.depth, from_address = EXCLUDED.from_address,
          to_address = EXCLUDED.to_address, value = EXCLUDED.value,
          gas = EXCLUDED.gas, gas_used = EXCLUDED.gas_used,

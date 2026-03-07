@@ -1,4 +1,4 @@
-import { getPool } from './pool.js';
+import { getReadPool } from './pool.js';
 
 export type BlockRow = {
   hash: string;
@@ -23,7 +23,7 @@ export type TransactionRow = {
 // --- Blocks ---
 
 export async function getLatestBlocks(limit = 10): Promise<BlockRow[]> {
-  const pool = getPool();
+  const pool = getReadPool();
   const result = await pool.query(
     `SELECT hash, height, parent_hash, producer, timestamp_ms, tx_count
      FROM blocks ORDER BY height DESC LIMIT $1`,
@@ -35,7 +35,7 @@ export async function getLatestBlocks(limit = 10): Promise<BlockRow[]> {
 export async function getBlocksPage(
   limit: number, offset: number, order: 'asc' | 'desc' = 'desc', producer?: string | null
 ): Promise<BlockRow[]> {
-  const pool = getPool();
+  const pool = getReadPool();
   const direction = order === 'asc' ? 'ASC' : 'DESC';
   const params: Array<string | number> = [limit, offset];
   const where = producer ? 'WHERE producer = $3' : '';
@@ -49,7 +49,7 @@ export async function getBlocksPage(
 }
 
 export async function getBlockByHeight(height: string) {
-  const pool = getPool();
+  const pool = getReadPool();
   const result = await pool.query(
     `SELECT hash, height, parent_hash, producer, timestamp_ms, gas_limit, gas_used,
             state_root, transactions_root, receipts_root
@@ -60,7 +60,7 @@ export async function getBlockByHeight(height: string) {
 }
 
 export async function getBlockByHash(hash: string) {
-  const pool = getPool();
+  const pool = getReadPool();
   const result = await pool.query(
     `SELECT hash, height FROM blocks WHERE hash = $1 LIMIT 1`,
     [hash]
@@ -71,7 +71,7 @@ export async function getBlockByHash(hash: string) {
 export async function getTransactionsByBlockHeight(
   height: string, limit: number, offset: number, order: 'asc' | 'desc' = 'desc'
 ): Promise<TransactionRow[]> {
-  const pool = getPool();
+  const pool = getReadPool();
   const direction = order === 'asc' ? 'ASC' : 'DESC';
   const result = await pool.query(
     `SELECT hash, block_height, from_address, to_address, value, status
@@ -85,7 +85,7 @@ export async function getTransactionsByBlockHeight(
 // --- Transactions ---
 
 export async function getLatestTransactions(limit = 10): Promise<TransactionRow[]> {
-  const pool = getPool();
+  const pool = getReadPool();
   const result = await pool.query(
     `SELECT hash, block_height, from_address, to_address, value, status
      FROM transactions ORDER BY block_height DESC, tx_index DESC LIMIT $1`,
@@ -98,7 +98,7 @@ export async function getTransactionsPage(
   limit: number, offset: number, order: 'asc' | 'desc' = 'desc',
   filters?: { address?: string; status?: string }
 ): Promise<TransactionRow[]> {
-  const pool = getPool();
+  const pool = getReadPool();
   const direction = order === 'asc' ? 'ASC' : 'DESC';
   const clauses: string[] = [];
   const params: Array<string | number> = [limit, offset];
@@ -127,7 +127,7 @@ export async function getTransactionsPage(
 }
 
 export async function getTransactionByHash(hash: string) {
-  const pool = getPool();
+  const pool = getReadPool();
   const result = await pool.query(
     `SELECT t.hash, t.block_height, t.from_address, t.to_address, t.value, t.status,
             t.gas_limit, t.gas_price, t.nonce, t.data, t.type, b.timestamp_ms
@@ -145,7 +145,7 @@ export async function getTransactionByHash(hash: string) {
 }
 
 export async function getReceiptLogsByTxHash(hash: string) {
-  const pool = getPool();
+  const pool = getReadPool();
   const result = await pool.query(
     `SELECT contract_address, topic0, topic1, topic2, topic3, data
      FROM events WHERE tx_hash = $1 ORDER BY log_index ASC`,
@@ -160,7 +160,7 @@ export async function getReceiptLogsByTxHash(hash: string) {
 // --- Addresses ---
 
 export async function getAddressOverview(address: string) {
-  const pool = getPool();
+  const pool = getReadPool();
   const result = await pool.query(
     `SELECT address, balance, nonce, last_seen_block FROM accounts WHERE address = $1 LIMIT 1`,
     [address]
@@ -169,7 +169,7 @@ export async function getAddressOverview(address: string) {
 }
 
 export async function getAddressStats(address: string) {
-  const pool = getPool();
+  const pool = getReadPool();
   const result = await pool.query(
     `SELECT
        (SELECT COUNT(*) FROM transactions WHERE from_address = $1) AS sent,
@@ -180,7 +180,7 @@ export async function getAddressStats(address: string) {
 }
 
 export async function getAddressAnalysis(address: string) {
-  const pool = getPool();
+  const pool = getReadPool();
   const result = await pool.query(
     `SELECT
        (SELECT COUNT(*) FROM transactions WHERE from_address = $1) AS sent_count,
@@ -195,7 +195,7 @@ export async function getAddressAnalysis(address: string) {
 export async function getAddressTransactions(
   address: string, limit: number, offset: number, order: 'asc' | 'desc' = 'desc'
 ): Promise<TransactionRow[]> {
-  const pool = getPool();
+  const pool = getReadPool();
   const direction = order === 'asc' ? 'ASC' : 'DESC';
   const result = await pool.query(
     `SELECT hash, block_height, from_address, to_address, value, status
@@ -210,7 +210,7 @@ export async function getAddressTransactions(
 // --- Contracts ---
 
 export async function getContractByAddress(address: string) {
-  const pool = getPool();
+  const pool = getReadPool();
   const result = await pool.query(
     `SELECT creator_tx_hash, created_at_block, code_hash, is_verified FROM contracts WHERE address = $1 LIMIT 1`,
     [address]
@@ -221,7 +221,7 @@ export async function getContractByAddress(address: string) {
 // --- Tokens ---
 
 export async function getTokensPage(limit: number, offset: number, order: 'asc' | 'desc' = 'desc') {
-  const pool = getPool();
+  const pool = getReadPool();
   const direction = order === 'asc' ? 'ASC' : 'DESC';
   const result = await pool.query(
     `SELECT address, name, symbol, decimals, total_supply, last_seen_block, token_type
@@ -232,7 +232,7 @@ export async function getTokensPage(limit: number, offset: number, order: 'asc' 
 }
 
 export async function getTokenByAddress(address: string) {
-  const pool = getPool();
+  const pool = getReadPool();
   const result = await pool.query(
     `SELECT address, name, symbol, decimals, total_supply, last_seen_block, token_type
      FROM tokens WHERE address = $1 LIMIT 1`,
@@ -244,7 +244,7 @@ export async function getTokenByAddress(address: string) {
 export async function getTokenTransfers(
   tokenAddress: string, limit: number, offset: number, order: 'asc' | 'desc' = 'desc'
 ) {
-  const pool = getPool();
+  const pool = getReadPool();
   const direction = order === 'asc' ? 'ASC' : 'DESC';
   const result = await pool.query(
     `SELECT tx_hash, block_height, from_address, to_address, value, token_id
@@ -257,7 +257,7 @@ export async function getTokenTransfers(
 }
 
 export async function getTokenHolders(tokenAddress: string, limit: number) {
-  const pool = getPool();
+  const pool = getReadPool();
   const token = await pool.query(`SELECT address FROM tokens WHERE address = $1 LIMIT 1`, [tokenAddress]);
   if (token.rowCount === 0) return null;
   const result = await pool.query(
@@ -272,7 +272,7 @@ export async function getTokenHolders(tokenAddress: string, limit: number) {
 export async function getTokenTransfersByAddress(
   address: string, limit: number, offset: number, order: 'asc' | 'desc' = 'desc'
 ) {
-  const pool = getPool();
+  const pool = getReadPool();
   const direction = order === 'asc' ? 'ASC' : 'DESC';
   const result = await pool.query(
     `SELECT tt.tx_hash, tt.block_height, tt.token_address, tt.from_address, tt.to_address, tt.value,
@@ -287,7 +287,7 @@ export async function getTokenTransfersByAddress(
 }
 
 export async function getTokenHoldingsByAddress(address: string) {
-  const pool = getPool();
+  const pool = getReadPool();
   const result = await pool.query(
     `SELECT tb.token_address, t.name AS token_name, t.symbol AS token_symbol,
             t.decimals AS token_decimals, t.token_type, tb.balance
@@ -300,7 +300,7 @@ export async function getTokenHoldingsByAddress(address: string) {
 }
 
 export async function getNftHoldingsByAddress(address: string) {
-  const pool = getPool();
+  const pool = getReadPool();
   const result = await pool.query(
     `SELECT tb.token_address, t.name AS token_name, t.symbol AS token_symbol,
             t.token_type, tb.token_id, tb.balance
@@ -313,7 +313,7 @@ export async function getNftHoldingsByAddress(address: string) {
 }
 
 export async function getNftHoldersByToken(tokenAddress: string, limit: number) {
-  const pool = getPool();
+  const pool = getReadPool();
   const result = await pool.query(
     `SELECT holder_address AS address, token_id, balance FROM token_balances
      WHERE token_address = $1 AND token_id IS NOT NULL AND balance::numeric > 0
@@ -326,7 +326,7 @@ export async function getNftHoldersByToken(tokenAddress: string, limit: number) 
 // --- Stats ---
 
 export async function getStatsOverview() {
-  const pool = getPool();
+  const pool = getReadPool();
   const result = await pool.query(
     `WITH recent_blocks AS (
        SELECT height, timestamp_ms FROM blocks WHERE height > 0 ORDER BY height DESC LIMIT 100
@@ -355,7 +355,7 @@ export async function getStatsOverview() {
 }
 
 export async function getStatsSeries() {
-  const pool = getPool();
+  const pool = getReadPool();
 
   const btResult = await pool.query(`
     WITH recent_blocks AS (
@@ -400,7 +400,7 @@ export async function getStatsSeries() {
 // --- Daily Stats ---
 
 export async function getDailyStats(days: number = 30) {
-  const pool = getPool();
+  const pool = getReadPool();
   const result = await pool.query(
     `SELECT date::text, tx_count::text, active_addresses, new_contracts,
             total_gas_used::text, avg_gas_price::text, block_count, avg_block_time_ms::text
@@ -413,7 +413,7 @@ export async function getDailyStats(days: number = 30) {
 // --- Search ---
 
 export async function searchBlockHeightPrefix(prefix: string, limit: number) {
-  const pool = getPool();
+  const pool = getReadPool();
   const result = await pool.query(
     `SELECT height FROM blocks WHERE height LIKE $1 ORDER BY height DESC LIMIT $2`,
     [`${prefix}%`, limit]
@@ -422,7 +422,7 @@ export async function searchBlockHeightPrefix(prefix: string, limit: number) {
 }
 
 export async function searchBlockHashPrefix(prefix: string, limit: number) {
-  const pool = getPool();
+  const pool = getReadPool();
   const result = await pool.query(
     `SELECT hash, height FROM blocks WHERE hash ILIKE $1 ORDER BY height DESC LIMIT $2`,
     [`${prefix}%`, limit]
@@ -431,7 +431,7 @@ export async function searchBlockHashPrefix(prefix: string, limit: number) {
 }
 
 export async function searchTransactionHashPrefix(prefix: string, limit: number) {
-  const pool = getPool();
+  const pool = getReadPool();
   const result = await pool.query(
     `SELECT hash, block_height FROM transactions WHERE hash ILIKE $1 ORDER BY block_height DESC LIMIT $2`,
     [`${prefix}%`, limit]
@@ -440,7 +440,7 @@ export async function searchTransactionHashPrefix(prefix: string, limit: number)
 }
 
 export async function searchAddressPrefix(prefix: string, limit: number) {
-  const pool = getPool();
+  const pool = getReadPool();
   const result = await pool.query(
     `SELECT address FROM accounts WHERE address ILIKE $1 ORDER BY last_seen_block DESC NULLS LAST LIMIT $2`,
     [`${prefix}%`, limit]
@@ -449,7 +449,7 @@ export async function searchAddressPrefix(prefix: string, limit: number) {
 }
 
 export async function searchTokensByName(query: string, limit: number) {
-  const pool = getPool();
+  const pool = getReadPool();
   const result = await pool.query(
     `SELECT address, name, symbol, token_type FROM tokens
      WHERE name ILIKE $1 OR symbol ILIKE $1
@@ -460,7 +460,7 @@ export async function searchTokensByName(query: string, limit: number) {
 }
 
 export async function searchContractsByName(query: string, limit: number) {
-  const pool = getPool();
+  const pool = getReadPool();
   const result = await pool.query(
     `SELECT c.address, t.name, COALESCE(c.is_verified, false) AS is_verified
      FROM contracts c LEFT JOIN tokens t ON t.address = c.address

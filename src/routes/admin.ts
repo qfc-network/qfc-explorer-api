@@ -1,11 +1,11 @@
 import { FastifyInstance } from 'fastify';
-import { getPool } from '../db/pool.js';
+import { getPool, getReadPool } from '../db/pool.js';
 import { getRateLimitStats, getConfig } from '../lib/rate-limit.js';
 
 export default async function adminRoutes(app: FastifyInstance) {
   // GET /admin/db
   app.get('/db', async () => {
-    const pool = getPool();
+    const pool = getReadPool();
     return {
       ok: true,
       data: {
@@ -20,7 +20,7 @@ export default async function adminRoutes(app: FastifyInstance) {
 
   // GET /admin/indexer
   app.get('/indexer', async () => {
-    const pool = getPool();
+    const pool = getReadPool();
     const result = await pool.query(
       `SELECT key, value, updated_at FROM indexer_state ORDER BY updated_at DESC LIMIT 10`
     );

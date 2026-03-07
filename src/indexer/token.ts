@@ -219,8 +219,8 @@ async function bulkInsertTransfers(
     `INSERT INTO token_transfers (
        token_address, tx_hash, block_height, log_index, from_address, to_address, value, token_id
      ) VALUES ${values.join(',')}
-     ON CONFLICT (tx_hash, log_index) DO UPDATE SET
-       token_address = EXCLUDED.token_address, block_height = EXCLUDED.block_height,
+     ON CONFLICT (tx_hash, log_index, block_height) DO UPDATE SET
+       token_address = EXCLUDED.token_address,
        from_address = EXCLUDED.from_address, to_address = EXCLUDED.to_address,
        value = EXCLUDED.value, token_id = EXCLUDED.token_id`,
     params

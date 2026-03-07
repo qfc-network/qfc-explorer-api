@@ -138,7 +138,8 @@ async function run(): Promise<void> {
   const skipOnError = process.env.INDEXER_SKIP_ON_ERROR === 'true';
   const retryFailed = process.env.INDEXER_RETRY_FAILED === 'true';
 
-  const rpc = new RpcClient(rpcUrl);
+  const archiveUrl = process.env.RPC_ARCHIVE_URL || undefined;
+  const rpc = new RpcClient(rpcUrl, archiveUrl);
 
   const lastProcessed = await getLastProcessedHeight();
   let current = lastProcessed !== null ? lastProcessed + 1n : startHeight;

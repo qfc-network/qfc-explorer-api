@@ -1,5 +1,5 @@
 import { checkDatabaseHealth, checkRpcHealth, checkIndexerLag } from '../db/health.js';
-import { getPool } from '../db/pool.js';
+import { getReadPool } from '../db/pool.js';
 import {
   indexerLagGauge, indexerHeightGauge, rpcHeightGauge,
   totalBlocksGauge, totalTransactionsGauge, totalAccountsGauge,
@@ -22,7 +22,7 @@ async function updateMetrics() {
     if (indexer.rpcHeight) rpcHeightGauge.set(Number(indexer.rpcHeight));
 
     // DB counts
-    const pool = getPool();
+    const pool = getReadPool();
     const [blocks, txs, accounts] = await Promise.all([
       pool.query('SELECT COUNT(*) AS c FROM blocks'),
       pool.query('SELECT COUNT(*) AS c FROM transactions'),

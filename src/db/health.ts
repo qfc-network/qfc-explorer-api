@@ -1,10 +1,10 @@
-import { getPool } from './pool.js';
+import { getReadPool } from './pool.js';
 import { rpcCall } from '../lib/rpc.js';
 
 export async function checkDatabaseHealth(): Promise<{ ok: boolean; latencyMs: number; error?: string }> {
   const start = Date.now();
   try {
-    const pool = getPool();
+    const pool = getReadPool();
     await pool.query('SELECT 1');
     return { ok: true, latencyMs: Date.now() - start };
   } catch (error) {
@@ -25,7 +25,7 @@ export async function checkRpcHealth(): Promise<{ ok: boolean; latencyMs: number
 
 export async function checkIndexerLag(): Promise<{ ok: boolean; indexedHeight: string | null; rpcHeight: string | null; lag: number | null; error?: string }> {
   try {
-    const pool = getPool();
+    const pool = getReadPool();
     const indexerResult = await pool.query(
       `SELECT value FROM indexer_state WHERE key = 'last_processed_height' LIMIT 1`
     );
