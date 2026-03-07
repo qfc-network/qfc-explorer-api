@@ -1,41 +1,72 @@
-import Redis from 'ioredis';
+import Redis, { Cluster } from 'ioredis';
 
-let redis: Redis | null = null;
+type RedisClient = Redis | Cluster;
+let client: RedisClient | null = null;
 
 /**
- * Get or create Redis connection.
- * Returns null if REDIS_URL is not set (cache disabled, all ops become no-ops).
+ * Get or create Redis/Cluster connection.
+ * Supports two modes:
+ *   - REDIS_CLUSTER_NODES=host1:port1,host2:port2,... → ioredis Cluster
+ *   - REDIS_URL=redis://host:port → standalone Redis
+ * Returns null if neither is set (cache disabled, all ops become no-ops).
  */
-export function getRedis(): Redis | null {
-  if (redis) return redis;
+export function getRedis(): RedisClient | null {
+  if (client) return client;
 
+  const clusterNodes = process.env.REDIS_CLUSTER_NODES;
   const url = process.env.REDIS_URL;
+
+  if (clusterNodes) {
+    const nodes = clusterNodes.split(',').map((n) => {
+      const [host, port] = n.trim().split(':');
+      return { host, port: Number(port) || 6379 };
+    });
+
+    client = new Cluster(nodes, {
+      redisOptions: {
+        maxRetriesPerRequest: 1,
+      },
+      clusterRetryStrategy(times) {
+        if (times > 3) return null;
+        return Math.min(times * 200, 2000);
+      },
+      enableReadyCheck: true,
+      scaleReads: 'slave',  // read from replicas for better throughput
+    });
+
+    client.on('error', (err) => {
+      console.error('[cache] Redis Cluster error:', err.message);
+    });
+
+    return client;
+  }
+
   if (!url) return null;
 
-  redis = new Redis(url, {
+  client = new Redis(url, {
     maxRetriesPerRequest: 1,
     lazyConnect: true,
     retryStrategy(times) {
-      if (times > 3) return null; // stop retrying
+      if (times > 3) return null;
       return Math.min(times * 200, 2000);
     },
   });
 
-  redis.on('error', (err) => {
+  client.on('error', (err) => {
     console.error('[cache] Redis error:', err.message);
   });
 
-  redis.connect().catch(() => {
-    // silent — getRedis() will return the instance, ops will fail gracefully
+  (client as Redis).connect().catch(() => {
+    // silent — ops will fail gracefully
   });
 
-  return redis;
+  return client;
 }
 
 export async function closeRedis(): Promise<void> {
-  if (redis) {
-    await redis.quit();
-    redis = null;
+  if (client) {
+    await client.quit();
+    client = null;
   }
 }
 
@@ -68,20 +99,41 @@ export async function cacheSet(key: string, value: unknown, ttlSeconds: number):
 
 /**
  * Delete a cached key (or pattern with wildcard).
+ * In cluster mode, scans each master node individually.
  */
 export async function cacheDel(key: string): Promise<void> {
   const r = getRedis();
   if (!r) return;
   try {
     if (key.includes('*')) {
-      const keys = await r.keys(key);
-      if (keys.length > 0) await r.del(...keys);
+      if (r instanceof Cluster) {
+        // Cluster: scan each master node
+        const masters = r.nodes('master');
+        for (const node of masters) {
+          const keys = await scanKeys(node, key);
+          if (keys.length > 0) await node.del(...keys);
+        }
+      } else {
+        const keys = await scanKeys(r, key);
+        if (keys.length > 0) await r.del(...keys);
+      }
     } else {
       await r.del(key);
     }
   } catch {
     // non-fatal
   }
+}
+
+/** Scan keys matching a pattern (cluster-safe, avoids KEYS command) */
+async function scanKeys(node: Redis, pattern: string): Promise<string[]> {
+  return new Promise((resolve) => {
+    const found: string[] = [];
+    const stream = node.scanStream({ match: pattern, count: 100 });
+    stream.on('data', (keys: string[]) => found.push(...keys));
+    stream.on('end', () => resolve(found));
+    stream.on('error', () => resolve(found));
+  });
 }
 
 /**
@@ -98,4 +150,15 @@ export async function cached<T>(
   const value = await compute();
   await cacheSet(key, value, ttlSeconds);
   return value;
+}
+
+/** Get Redis mode info for health/admin endpoints */
+export function getRedisConfig() {
+  const clusterNodes = process.env.REDIS_CLUSTER_NODES;
+  const url = process.env.REDIS_URL;
+  return {
+    mode: clusterNodes ? 'cluster' : url ? 'standalone' : 'disabled',
+    nodes: clusterNodes ? clusterNodes.split(',').length : url ? 1 : 0,
+    connected: client !== null,
+  };
 }

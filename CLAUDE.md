@@ -167,7 +167,8 @@ Refreshes `daily_stats` table after each batch.
 | `HOST` | `0.0.0.0` | Bind address |
 | `CORS_ORIGIN` | `*` | Allowed CORS origins |
 | `SSE_INTERVAL_MS` | `5000` | SSE push interval (min 3000ms) |
-| `REDIS_URL` | — | Redis connection string (optional, cache disabled if unset) |
+| `REDIS_URL` | — | Redis standalone connection string (optional, cache disabled if unset) |
+| `REDIS_CLUSTER_NODES` | — | Redis Cluster nodes, comma-separated host:port (overrides REDIS_URL) |
 | `INDEXER_START_HEIGHT` | `0` | Block height to start indexing from |
 | `INDEXER_POLL_INTERVAL_MS` | `10000` | Polling interval between indexing batches |
 | `INDEXER_USE_FINALIZED` | `true` | Only index finalized blocks |
