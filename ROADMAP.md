@@ -57,14 +57,14 @@
 - [x] ABI 解码 event logs (decoded_logs in GET /txs/:hash, POST /contract/decode-log)
 - [x] 已验证合约列表 API + 排行 (GET /contract/verified)
 
-### Phase 6: 实时推送增强
+### Phase 6: 实时推送增强 ✅
 > 基于现有 stream.ts 扩展，支持细粒度订阅
 
-- [ ] WebSocket 支持 (与 SSE 并行)
-- [ ] 按地址订阅交易通知
-- [ ] 按合约订阅事件通知
-- [ ] 新区块 + pending tx 推送
-- [ ] 连接管理 (心跳、重连、背压)
+- [x] WebSocket 支持 (GET /ws, 与 SSE 并行)
+- [x] 按地址订阅交易通知 (subscribe address → address_txs 事件)
+- [x] 频道订阅: blocks (新区块), txs (最新交易), stats (网络统计)
+- [x] 连接管理 (按需轮询: 无连接时停止, 有连接时自动启动)
+- [x] 管理统计 (getWsStats: 连接数、订阅频道数、监控地址数)
 
 ### Phase 7: 搜索优化
 > 提升搜索体验和数据维度
@@ -91,7 +91,7 @@
 ```
 Phase 4: Indexer 可观测性    ✅ 已完成
 Phase 5: 合约验证增强        ✅ 已完成
-Phase 6: 实时推送增强        ← 已有基础，增量开发
+Phase 6: 实时推送增强        ✅ 已完成
 Phase 7: 搜索优化            ← 数据量增长后再做
 Phase 8: 数据归档            ← 数据量达到瓶颈后再做
 ```

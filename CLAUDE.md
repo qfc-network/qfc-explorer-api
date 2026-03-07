@@ -41,6 +41,7 @@ src/
     governance.ts        # GET /governance/models
     leaderboard.ts       # GET /leaderboard (top balances, active, validators, contracts)
     stream.ts            # GET /stream (SSE real-time stats)
+    ws.ts                # GET /ws (WebSocket subscriptions: blocks, txs, stats, address)
     admin.ts             # GET /admin/db, GET /admin/indexer, POST /admin/indexer/rescan
     health.ts            # GET /health (DB + RPC + indexer lag check)
     tools.ts             # GET /tools/keccak256
