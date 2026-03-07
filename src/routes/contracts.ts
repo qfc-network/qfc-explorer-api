@@ -3,6 +3,7 @@ import { getPool, getReadPool } from '../db/pool.js';
 import { rpcCall, rpcCallSafe } from '../lib/rpc.js';
 import { clamp, parseNumber } from '../lib/pagination.js';
 import { cached, cacheGet, cacheSet } from '../lib/cache.js';
+import { decodeFunction, decodeEvent, getContractAbi, type AbiItem } from '../lib/abi-decoder.js';
 
 // EIP-1967 / EIP-1822 storage slots
 const EIP1967_IMPL_SLOT = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc';
@@ -329,5 +330,132 @@ export default async function contractsRoutes(app: FastifyInstance) {
       reply.status(500);
       return { ok: false, error: error instanceof Error ? error.message : 'Verification failed' };
     }
+  });
+
+  // POST /contract/verify-json — Standard JSON Input verification (multi-file)
+  app.post('/verify-json', async (request, reply) => {
+    const body = request.body as {
+      address: string;
+      standardJsonInput: string;
+      compilerVersion: string;
+    };
+
+    if (!body.address || !body.standardJsonInput || !body.compilerVersion) {
+      reply.status(400);
+      return { ok: false, error: 'Missing required fields: address, standardJsonInput, compilerVersion' };
+    }
+
+    const deployedCode = await rpcCallSafe<string>('eth_getCode', [body.address, 'latest']);
+    if (!deployedCode || deployedCode === '0x') {
+      reply.status(400);
+      return { ok: false, error: 'No contract code at this address' };
+    }
+
+    try {
+      let jsonInput: { language: string; sources: Record<string, unknown>; settings?: Record<string, unknown> };
+      try {
+        jsonInput = JSON.parse(body.standardJsonInput);
+      } catch {
+        reply.status(400);
+        return { ok: false, error: 'Invalid JSON input' };
+      }
+
+      // Ensure output selection includes what we need
+      if (!jsonInput.settings) jsonInput.settings = {};
+      jsonInput.settings.outputSelection = { '*': { '*': ['abi', 'evm.bytecode', 'evm.deployedBytecode'] } };
+      // QFC: always paris
+      if (!jsonInput.settings.evmVersion) jsonInput.settings.evmVersion = 'paris';
+
+      const solc = await import(/* webpackIgnore: true */ 'solc' as string) as { compile: (input: string) => string };
+      const output = JSON.parse(solc.compile(JSON.stringify(jsonInput)));
+
+      if (output.errors?.some((e: { severity: string }) => e.severity === 'error')) {
+        reply.status(400);
+        return {
+          ok: false, error: 'Compilation failed',
+          details: output.errors.filter((e: { severity: string }) => e.severity === 'error'),
+        };
+      }
+
+      const stripMeta = (hex: string) => {
+        const clean = hex.replace(/^0x/, '');
+        if (clean.length < 4) return clean;
+        const metaLen = parseInt(clean.slice(-4), 16) * 2 + 4;
+        return metaLen < clean.length ? clean.slice(0, clean.length - metaLen) : clean;
+      };
+      const deployedStripped = stripMeta(deployedCode);
+
+      // Search across all source files and contracts
+      for (const [fileName, fileContracts] of Object.entries(output.contracts || {})) {
+        for (const [contractName, contractData] of Object.entries(fileContracts as Record<string, unknown>)) {
+          const compiled = (contractData as { evm: { deployedBytecode: { object: string } } }).evm.deployedBytecode.object;
+          const abi = (contractData as { abi: unknown[] }).abi;
+          if (stripMeta(compiled) === deployedStripped) {
+            const pool = getPool();
+            const evmVersion = (jsonInput.settings?.evmVersion as string) || 'paris';
+            const optimizer = jsonInput.settings?.optimizer as { enabled?: boolean; runs?: number } | undefined;
+            await pool.query(
+              `UPDATE contracts SET
+                 source_code = $2, abi = $3, compiler_version = $4,
+                 evm_version = $5, optimization_runs = $6,
+                 is_verified = true, verified_at = NOW()
+               WHERE address = $1`,
+              [body.address, body.standardJsonInput, JSON.stringify(abi),
+               body.compilerVersion, evmVersion, optimizer?.runs ?? null]
+            );
+            return {
+              ok: true,
+              data: {
+                address: body.address, verified: true,
+                contractName: `${fileName}:${contractName}`,
+                compiler: body.compilerVersion, evmVersion,
+              },
+            };
+          }
+        }
+      }
+
+      reply.status(400);
+      return { ok: false, error: 'Bytecode mismatch — verification failed' };
+    } catch (error) {
+      reply.status(500);
+      return { ok: false, error: error instanceof Error ? error.message : 'Verification failed' };
+    }
+  });
+
+  // POST /contract/decode — decode calldata using verified ABI
+  app.post('/decode', async (request, reply) => {
+    const body = request.body as { address: string; input: string };
+    if (!body.address || !body.input) {
+      reply.status(400);
+      return { ok: false, error: 'Missing address or input' };
+    }
+
+    const pool = getReadPool();
+    const abi = await getContractAbi(pool, body.address.toLowerCase());
+    if (!abi) {
+      return { ok: true, data: { decoded: null, reason: 'Contract not verified or ABI not available' } };
+    }
+
+    const decoded = decodeFunction(body.input, abi);
+    return { ok: true, data: { decoded } };
+  });
+
+  // POST /contract/decode-log — decode event log using verified ABI
+  app.post('/decode-log', async (request, reply) => {
+    const body = request.body as { address: string; topics: string[]; data: string };
+    if (!body.address || !body.topics) {
+      reply.status(400);
+      return { ok: false, error: 'Missing address or topics' };
+    }
+
+    const pool = getReadPool();
+    const abi = await getContractAbi(pool, body.address.toLowerCase());
+    if (!abi) {
+      return { ok: true, data: { decoded: null, reason: 'Contract not verified or ABI not available' } };
+    }
+
+    const decoded = decodeEvent(body.topics, body.data || '0x', abi);
+    return { ok: true, data: { decoded } };
   });
 }

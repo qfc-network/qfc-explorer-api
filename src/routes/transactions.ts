@@ -6,6 +6,8 @@ import {
 import { rpcCallSafe } from '../lib/rpc.js';
 import { clamp, parseNumber, parseOrder } from '../lib/pagination.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
+import { getReadPool } from '../db/pool.js';
+import { decodeFunction, decodeEvent, getContractAbi } from '../lib/abi-decoder.js';
 
 export default async function transactionsRoutes(app: FastifyInstance) {
   // GET /txs — paginated list
@@ -41,13 +43,36 @@ export default async function transactionsRoutes(app: FastifyInstance) {
         contractAddress?: string;
       }>('eth_getTransactionReceipt', [hash]);
 
+      // Auto-decode input data + logs if contract is verified
+      let decodedInput = null;
+      let decodedLogs = null;
+      const toAddr = tx.to_address;
+      if (toAddr) {
+        const pool = getReadPool();
+        const abi = await getContractAbi(pool, toAddr.toLowerCase());
+        if (abi) {
+          if (tx.data && tx.data !== '0x') {
+            decodedInput = decodeFunction(tx.data, abi);
+          }
+          decodedLogs = (logs as Array<Record<string, unknown>>)
+            .map((log) => {
+              const topics = [log.topic0, log.topic1, log.topic2, log.topic3].filter((t): t is string => !!t);
+              if (topics.length === 0) return null;
+              return decodeEvent(topics, (log.data as string) || '0x', abi!);
+            })
+            .filter(Boolean);
+        }
+      }
+
       const data = {
         transaction: {
           ...tx,
           gas_used: receipt?.gasUsed ? parseInt(receipt.gasUsed, 16).toString() : null,
           contract_address: receipt?.contractAddress ?? null,
+          decoded_input: decodedInput,
         },
         logs,
+        decoded_logs: decodedLogs,
         source: 'indexed',
       };
       await cacheSet(cacheKey, data, 60);

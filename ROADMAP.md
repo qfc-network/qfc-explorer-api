@@ -47,15 +47,15 @@
 - [x] 错误率 + 失败区块计数 (rpc_errors_total, blocks_skipped_total)
 - [x] Indexer 独立 /metrics 端点 (:9090, 与 API :3001 分离)
 
-### Phase 5: 合约验证增强
+### Phase 5: 合约验证增强 ✅
 > Solidity source verification + ABI 解码，提升数据可读性
 
-- [ ] Solidity 源码验证 (solc 编译 + bytecode 比对)
-- [ ] 多文件 + import 支持 (Standard JSON Input)
-- [ ] 验证后自动存储 ABI
-- [ ] ABI 解码 internal tx 的 input/output (方法名 + 参数)
-- [ ] ABI 解码 event logs (事件名 + 参数)
-- [ ] 已验证合约列表 API + 排行
+- [x] Solidity 源码验证 (solc 编译 + bytecode 比对, CBOR metadata stripping)
+- [x] 多文件 + import 支持 (POST /contract/verify-json, Standard JSON Input)
+- [x] 验证后自动存储 ABI (contracts.abi JSON column)
+- [x] ABI 解码 tx input (decoded_input in GET /txs/:hash, POST /contract/decode)
+- [x] ABI 解码 event logs (decoded_logs in GET /txs/:hash, POST /contract/decode-log)
+- [x] 已验证合约列表 API + 排行 (GET /contract/verified)
 
 ### Phase 6: 实时推送增强
 > 基于现有 stream.ts 扩展，支持细粒度订阅
@@ -90,7 +90,7 @@
 
 ```
 Phase 4: Indexer 可观测性    ✅ 已完成
-Phase 5: 合约验证增强        ← 用户体验核心，中等复杂度
+Phase 5: 合约验证增强        ✅ 已完成
 Phase 6: 实时推送增强        ← 已有基础，增量开发
 Phase 7: 搜索优化            ← 数据量增长后再做
 Phase 8: 数据归档            ← 数据量达到瓶颈后再做

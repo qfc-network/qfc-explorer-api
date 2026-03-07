@@ -31,7 +31,8 @@ src/
     transactions.ts      # GET /txs, GET /txs/:hash (DB + RPC fallback), GET /txs/:hash/internal
     addresses.ts         # GET /address/:address (overview, stats, txs, tokens, NFTs, internal_txs tab)
     contracts.ts         # GET /contract/:address, POST /contract/call, POST /contract/verify
-                         # GET /contract (list), GET /contract/verified (leaderboard)
+                         # POST /contract/verify-json (Standard JSON Input), POST /contract/decode
+                         # POST /contract/decode-log, GET /contract (list), GET /contract/verified
     tokens.ts            # GET /tokens, GET /tokens/:address, GET /tokens/:address/holders
     search.ts            # GET /search, GET /search/suggest
     analytics.ts         # GET /analytics, GET /analytics/daily, GET /analytics/export
@@ -49,6 +50,7 @@ src/
     health.ts            # Health check queries (DB, RPC, indexer lag)
   lib/
     rpc.ts               # Centralized RPC client (rpcCall / rpcCallSafe)
+    abi-decoder.ts       # ABI decoding (function calldata + event logs from verified contracts)
     pagination.ts        # Query param parsing (parseNumber, clamp, parseOrder)
     format.ts            # Formatting utilities (shortenHash, formatWeiToQfc)
     rate-limit.ts        # In-memory rate limiter (100 req/min/IP)
