@@ -27,6 +27,8 @@ import etherscanRoutes from './routes/etherscan.js';
 import txpoolRoutes from './routes/txpool.js';
 import authRoutes from './routes/auth.js';
 import watchlistRoutes from './routes/watchlist.js';
+import apikeysRoutes from './routes/apikeys.js';
+import { apiKeyAuth } from './middleware/apikey-auth.js';
 
 const PORT = Number(process.env.PORT || 3001);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -100,6 +102,10 @@ await app.register(etherscanRoutes, { prefix: '/' });
 await app.register(txpoolRoutes, { prefix: '/txpool' });
 await app.register(authRoutes, { prefix: '/auth' });
 await app.register(watchlistRoutes, { prefix: '/watchlist' });
+await app.register(apikeysRoutes, { prefix: '/api-keys' });
+
+// Global API key authentication hook
+app.addHook('onRequest', apiKeyAuth);
 
 // Graceful shutdown
 const shutdown = async () => {

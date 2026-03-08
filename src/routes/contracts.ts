@@ -108,6 +108,66 @@ export default async function contractsRoutes(app: FastifyInstance) {
     return { ok: true, data };
   });
 
+  // GET /contract/:address/proxy-abi — get implementation ABI for proxy contracts
+  app.get('/:address/proxy-abi', async (request, reply) => {
+    const { address } = request.params as { address: string };
+
+    if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
+      reply.status(400);
+      return { ok: false, error: 'Invalid address format' };
+    }
+
+    const cacheKey = `proxy-abi:${address.toLowerCase()}`;
+    const hit = await cacheGet(cacheKey);
+    if (hit) return { ok: true, data: hit };
+
+    // Check if the address is a proxy
+    const proxy = await detectProxy(address);
+    if (!proxy.implementation_address) {
+      const data = { isProxy: false as const };
+      await cacheSet(cacheKey, data, 60);
+      return { ok: true, data };
+    }
+
+    // Look up the implementation contract's verified ABI
+    const pool = getReadPool();
+    const implRow = await pool.query(
+      `SELECT abi, is_verified FROM contracts WHERE address = $1 LIMIT 1`,
+      [proxy.implementation_address]
+    );
+    const impl = implRow.rows[0];
+
+    if (!impl?.is_verified || !impl.abi) {
+      const data = {
+        isProxy: true as const,
+        implementation: proxy.implementation_address,
+        proxyType: proxy.proxy_type,
+        abi: null,
+        implementationVerified: false,
+      };
+      await cacheSet(cacheKey, data, 30);
+      return { ok: true, data };
+    }
+
+    // Parse ABI — stored as JSON string or JSONB
+    let abi: unknown[];
+    if (typeof impl.abi === 'string') {
+      try { abi = JSON.parse(impl.abi); } catch { abi = []; }
+    } else {
+      abi = impl.abi;
+    }
+
+    const data = {
+      isProxy: true as const,
+      implementation: proxy.implementation_address,
+      proxyType: proxy.proxy_type,
+      abi,
+      implementationVerified: true,
+    };
+    await cacheSet(cacheKey, data, 30);
+    return { ok: true, data };
+  });
+
   // POST /contract/call — read-only contract call
   app.post('/call', async (request, reply) => {
     const body = request.body as {
