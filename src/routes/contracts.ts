@@ -12,6 +12,17 @@ const EIP1967_BEACON_SLOT = '0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6
 
 const ZERO_ADDR = '0x' + '0'.repeat(40);
 
+/**
+ * Flatten multi-file sources into a single display string.
+ * Each file is separated by a comment header with the file path.
+ */
+function flattenMultiFileSources(files: Record<string, string>): string {
+  const sorted = Object.entries(files).sort(([a], [b]) => a.localeCompare(b));
+  return sorted
+    .map(([path, content]) => `// File: ${path}\n\n${content.trim()}`)
+    .join('\n\n');
+}
+
 function extractAddress(slot: string | null): string | null {
   if (!slot || slot === '0x' || slot === '0x' + '0'.repeat(64)) return null;
   const addr = '0x' + slot.slice(-40);
@@ -477,6 +488,175 @@ export default async function contractsRoutes(app: FastifyInstance) {
 
       reply.status(400);
       return { ok: false, error: 'Bytecode mismatch — verification failed' };
+    } catch (error) {
+      reply.status(500);
+      return { ok: false, error: error instanceof Error ? error.message : 'Verification failed' };
+    }
+  });
+
+  // POST /contract/verify-multi — multi-file source code verification
+  app.post('/verify-multi', async (request, reply) => {
+    const body = request.body as {
+      address: string;
+      compiler_version: string;
+      evm_version?: string;
+      optimization_runs?: number | null;
+      constructor_args?: string;
+      files: Record<string, string>;
+      entry_contract: string;
+    };
+
+    if (!body.address || !body.compiler_version || !body.files || !body.entry_contract) {
+      reply.status(400);
+      return { ok: false, error: 'Missing required fields: address, compiler_version, files, entry_contract' };
+    }
+
+    if (!/^0x[a-fA-F0-9]{40}$/.test(body.address)) {
+      reply.status(400);
+      return { ok: false, error: 'Invalid address format' };
+    }
+
+    const fileEntries = Object.entries(body.files);
+    if (fileEntries.length === 0) {
+      reply.status(400);
+      return { ok: false, error: 'No source files provided' };
+    }
+
+    // Validate entry_contract format: "path/File.sol:ContractName"
+    const colonIdx = body.entry_contract.lastIndexOf(':');
+    if (colonIdx === -1) {
+      reply.status(400);
+      return { ok: false, error: 'entry_contract must be in format "path/File.sol:ContractName"' };
+    }
+    const entryFile = body.entry_contract.slice(0, colonIdx);
+    const entryName = body.entry_contract.slice(colonIdx + 1);
+
+    if (!body.files[entryFile]) {
+      reply.status(400);
+      return { ok: false, error: `Entry file "${entryFile}" not found in provided files` };
+    }
+
+    // Fetch deployed bytecode
+    const deployedCode = await rpcCallSafe<string>('eth_getCode', [body.address, 'latest']);
+    if (!deployedCode || deployedCode === '0x') {
+      reply.status(400);
+      return { ok: false, error: 'No contract code at this address' };
+    }
+
+    try {
+      const solc = await import(/* webpackIgnore: true */ 'solc' as string) as { compile: (input: string) => string };
+      const evmVersion = body.evm_version || 'paris';
+      const optimizationRuns = body.optimization_runs ?? null;
+
+      // Build Solidity Standard JSON Input from multi-file sources
+      const sources: Record<string, { content: string }> = {};
+      for (const [filename, content] of fileEntries) {
+        sources[filename] = { content };
+      }
+
+      const standardJsonInput = {
+        language: 'Solidity',
+        sources,
+        settings: {
+          evmVersion,
+          optimizer: optimizationRuns != null
+            ? { enabled: true, runs: optimizationRuns }
+            : { enabled: false },
+          outputSelection: { '*': { '*': ['abi', 'evm.bytecode', 'evm.deployedBytecode'] } },
+        },
+      };
+
+      const output = JSON.parse(solc.compile(JSON.stringify(standardJsonInput)));
+
+      if (output.errors?.some((e: { severity: string }) => e.severity === 'error')) {
+        reply.status(400);
+        return {
+          ok: false,
+          error: 'Compilation failed',
+          details: output.errors.filter((e: { severity: string }) => e.severity === 'error'),
+        };
+      }
+
+      // Strip CBOR metadata for comparison
+      const stripMeta = (hex: string) => {
+        const clean = hex.replace(/^0x/, '');
+        if (clean.length < 4) return clean;
+        const metaLen = parseInt(clean.slice(-4), 16) * 2 + 4;
+        return metaLen < clean.length ? clean.slice(0, clean.length - metaLen) : clean;
+      };
+
+      const deployedStripped = stripMeta(deployedCode);
+
+      // Look for the specific entry contract first
+      const entryContracts = output.contracts?.[entryFile];
+      const entryContract = entryContracts?.[entryName];
+
+      if (!entryContract) {
+        // Fall back: search all compiled contracts
+        for (const [fileName, fileContracts] of Object.entries(output.contracts || {})) {
+          for (const [contractName, contractData] of Object.entries(fileContracts as Record<string, unknown>)) {
+            const compiled = (contractData as { evm: { deployedBytecode: { object: string } } }).evm.deployedBytecode.object;
+            const abi = (contractData as { abi: unknown[] }).abi;
+            if (stripMeta(compiled) === deployedStripped) {
+              const pool = getPool();
+              const flatSource = flattenMultiFileSources(body.files);
+              await pool.query(
+                `UPDATE contracts SET
+                   source_code = $2, abi = $3, compiler_version = $4,
+                   evm_version = $5, optimization_runs = $6,
+                   is_verified = true, verified_at = NOW()
+                 WHERE address = $1`,
+                [body.address, flatSource, JSON.stringify(abi),
+                 body.compiler_version, evmVersion, optimizationRuns]
+              );
+              return {
+                ok: true,
+                data: {
+                  address: body.address, verified: true,
+                  contractName: `${fileName}:${contractName}`,
+                  compiler: body.compiler_version, evmVersion,
+                  optimizationRuns,
+                },
+              };
+            }
+          }
+        }
+
+        reply.status(400);
+        return { ok: false, error: 'Bytecode mismatch — verification failed' };
+      }
+
+      const compiled = (entryContract as { evm: { deployedBytecode: { object: string } } }).evm.deployedBytecode.object;
+      const abi = (entryContract as { abi: unknown[] }).abi;
+      const compiledStripped = stripMeta(compiled);
+
+      if (deployedStripped !== compiledStripped) {
+        reply.status(400);
+        return { ok: false, error: 'Bytecode mismatch — verification failed' };
+      }
+
+      // Match found — store flattened source, ABI, and compiler settings
+      const pool = getPool();
+      const flatSource = flattenMultiFileSources(body.files);
+      await pool.query(
+        `UPDATE contracts SET
+           source_code = $2, abi = $3, compiler_version = $4,
+           evm_version = $5, optimization_runs = $6,
+           is_verified = true, verified_at = NOW()
+         WHERE address = $1`,
+        [body.address, flatSource, JSON.stringify(abi),
+         body.compiler_version, evmVersion, optimizationRuns]
+      );
+
+      return {
+        ok: true,
+        data: {
+          address: body.address, verified: true,
+          contractName: body.entry_contract,
+          compiler: body.compiler_version, evmVersion,
+          optimizationRuns,
+        },
+      };
     } catch (error) {
       reply.status(500);
       return { ok: false, error: error instanceof Error ? error.message : 'Verification failed' };

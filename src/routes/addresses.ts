@@ -10,6 +10,7 @@ import { rpcCallSafe } from '../lib/rpc.js';
 import { clamp, parseNumber, parseOrder } from '../lib/pagination.js';
 import { cached } from '../lib/cache.js';
 import { getTokenPrice, getTokenPrices } from '../lib/price-service.js';
+import { detectMultisig } from '../lib/multisig-detector.js';
 
 export default async function addressesRoutes(app: FastifyInstance) {
   // GET /address/:address
@@ -382,6 +383,23 @@ export default async function addressesRoutes(app: FastifyInstance) {
     });
 
     return { ok: true, data: profile };
+  });
+
+  // GET /address/:address/multisig — detect Safe (Gnosis) multisig wallet
+  app.get('/:address/multisig', async (request) => {
+    const { address } = request.params as { address: string };
+    const addr = address.toLowerCase();
+
+    const cacheKey = `addr:multisig:${addr}`;
+    const multisig = await cached(cacheKey, 60, async () => {
+      // Only check contracts (EOAs cannot be multisig wallets)
+      const contract = await getContractByAddress(addr);
+      if (!contract) return null;
+
+      return detectMultisig(addr);
+    });
+
+    return { ok: true, data: multisig };
   });
 
   // GET /address/:address/nft-metadata — fetch NFT tokenURI + metadata for holdings
