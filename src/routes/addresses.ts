@@ -238,6 +238,152 @@ export default async function addressesRoutes(app: FastifyInstance) {
     return { ok: true, data: { address, approvals } };
   });
 
+  // GET /address/:address/profile — comprehensive address activity analysis
+  app.get('/:address/profile', async (request) => {
+    const { address } = request.params as { address: string };
+    const addr = address.toLowerCase();
+    const pool = getReadPool();
+
+    const cacheKey = `addr:profile:${addr}`;
+    const profile = await cached(cacheKey, 60, async () => {
+      // Run all queries in parallel
+      const [
+        timeRange,
+        txCounts,
+        valueSums,
+        gasResult,
+        uniqueResult,
+        topInteractions,
+        heatmap,
+        tokenDiversityResult,
+      ] = await Promise.all([
+        // First and last transaction timestamps
+        pool.query(
+          `SELECT
+             MIN(b.timestamp_ms) AS first_tx_at,
+             MAX(b.timestamp_ms) AS last_tx_at
+           FROM transactions t
+           JOIN blocks b ON b.height = t.block_height
+           WHERE t.from_address = $1 OR t.to_address = $1`,
+          [addr]
+        ),
+        // Sent and received counts
+        pool.query(
+          `SELECT
+             COUNT(*) FILTER (WHERE from_address = $1) AS total_sent,
+             COUNT(*) FILTER (WHERE to_address = $1) AS total_received
+           FROM transactions
+           WHERE from_address = $1 OR to_address = $1`,
+          [addr]
+        ),
+        // Sent and received value sums (value stored as numeric text / hex)
+        pool.query(
+          `SELECT
+             COALESCE(SUM(CASE WHEN from_address = $1 THEN
+               CASE WHEN value ~ '^0x' THEN ('x' || lpad(substr(value, 3), 16, '0'))::bit(64)::bigint
+                    WHEN value ~ '^[0-9]+$' THEN value::numeric
+                    ELSE 0 END
+             ELSE 0 END), 0) AS total_sent_value,
+             COALESCE(SUM(CASE WHEN to_address = $1 THEN
+               CASE WHEN value ~ '^0x' THEN ('x' || lpad(substr(value, 3), 16, '0'))::bit(64)::bigint
+                    WHEN value ~ '^[0-9]+$' THEN value::numeric
+                    ELSE 0 END
+             ELSE 0 END), 0) AS total_received_value
+           FROM transactions
+           WHERE from_address = $1 OR to_address = $1`,
+          [addr]
+        ),
+        // Total gas spent (gas_used * gas_price) for sent transactions
+        pool.query(
+          `SELECT COALESCE(SUM(
+             CASE WHEN gas_used ~ '^[0-9]+$' AND gas_price ~ '^[0-9]+$'
+                  THEN gas_used::numeric * gas_price::numeric
+                  ELSE 0 END
+           ), 0) AS total_gas_spent
+           FROM transactions
+           WHERE from_address = $1`,
+          [addr]
+        ),
+        // Unique interactions (distinct to_address for sent txs)
+        pool.query(
+          `SELECT COUNT(DISTINCT to_address) AS unique_interactions
+           FROM transactions
+           WHERE from_address = $1 AND to_address IS NOT NULL`,
+          [addr]
+        ),
+        // Top 10 most interacted addresses
+        pool.query(
+          `SELECT to_address AS address, COUNT(*) AS tx_count
+           FROM transactions
+           WHERE from_address = $1 AND to_address IS NOT NULL
+           GROUP BY to_address
+           ORDER BY tx_count DESC
+           LIMIT 10`,
+          [addr]
+        ),
+        // Activity heatmap: daily tx count for last 365 days
+        pool.query(
+          `SELECT DATE(to_timestamp(b.timestamp_ms / 1000.0)) AS day, COUNT(*) AS tx_count
+           FROM transactions t
+           JOIN blocks b ON b.height = t.block_height
+           WHERE (t.from_address = $1 OR t.to_address = $1)
+             AND b.timestamp_ms >= $2
+           GROUP BY day
+           ORDER BY day ASC`,
+          [addr, Date.now() - 365 * 86400000]
+        ),
+        // Token diversity: distinct token addresses interacted with
+        pool.query(
+          `SELECT COUNT(DISTINCT token_address) AS token_diversity
+           FROM token_transfers
+           WHERE from_address = $1 OR to_address = $1`,
+          [addr]
+        ),
+      ]);
+
+      const sent = Number(txCounts.rows[0]?.total_sent ?? 0);
+      const received = Number(txCounts.rows[0]?.total_received ?? 0);
+      const totalTxs = sent + received;
+
+      // Compute activity level based on tx frequency
+      const firstAt = Number(timeRange.rows[0]?.first_tx_at ?? 0);
+      const lastAt = Number(timeRange.rows[0]?.last_tx_at ?? 0);
+      let activityLevel = 'dormant';
+      if (totalTxs > 0 && firstAt > 0) {
+        const monthsActive = Math.max(1, (Date.now() - firstAt) / (30 * 86400000));
+        const txPerMonth = totalTxs / monthsActive;
+        if (txPerMonth > 100) activityLevel = 'very_active';
+        else if (txPerMonth > 10) activityLevel = 'active';
+        else if (txPerMonth > 1) activityLevel = 'moderate';
+        else activityLevel = 'dormant';
+      }
+
+      return {
+        address: addr,
+        first_tx_at: firstAt || null,
+        last_tx_at: lastAt || null,
+        total_sent: sent,
+        total_received: received,
+        total_sent_value: String(valueSums.rows[0]?.total_sent_value ?? '0'),
+        total_received_value: String(valueSums.rows[0]?.total_received_value ?? '0'),
+        total_gas_spent: String(gasResult.rows[0]?.total_gas_spent ?? '0'),
+        unique_interactions: Number(uniqueResult.rows[0]?.unique_interactions ?? 0),
+        top_interactions: topInteractions.rows.map((r: { address: string; tx_count: string }) => ({
+          address: r.address,
+          tx_count: Number(r.tx_count),
+        })),
+        activity_heatmap: heatmap.rows.map((r: { day: string; tx_count: string }) => ({
+          day: typeof r.day === 'string' ? r.day : new Date(r.day).toISOString().slice(0, 10),
+          count: Number(r.tx_count),
+        })),
+        token_diversity: Number(tokenDiversityResult.rows[0]?.token_diversity ?? 0),
+        activity_level: activityLevel,
+      };
+    });
+
+    return { ok: true, data: profile };
+  });
+
   // GET /address/:address/nft-metadata — fetch NFT tokenURI + metadata for holdings
   app.get('/:address/nft-metadata', async (request) => {
     const { address } = request.params as { address: string };

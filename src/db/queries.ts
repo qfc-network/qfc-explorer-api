@@ -699,6 +699,69 @@ export async function upsertAddressLabel(
   );
 }
 
+export async function listAddressLabelsByCategory(category: string | undefined, limit: number, offset: number) {
+  const pool = getReadPool();
+  if (category && category !== 'all') {
+    const result = await pool.query(
+      `SELECT address, label, category, description, website, logo_url, verified, created_at
+       FROM address_labels
+       WHERE category = $1 AND (verified = TRUE OR submitted_by IS NULL)
+       ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+      [category, limit, offset]
+    );
+    return result.rows;
+  }
+  const result = await pool.query(
+    `SELECT address, label, category, description, website, logo_url, verified, created_at
+     FROM address_labels
+     WHERE verified = TRUE OR submitted_by IS NULL
+     ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
+    [limit, offset]
+  );
+  return result.rows;
+}
+
+export async function countAddressLabels(category?: string) {
+  const pool = getReadPool();
+  if (category && category !== 'all') {
+    const result = await pool.query(
+      `SELECT COUNT(*) FROM address_labels WHERE category = $1 AND (verified = TRUE OR submitted_by IS NULL)`,
+      [category]
+    );
+    return Number(result.rows[0].count);
+  }
+  const result = await pool.query(
+    `SELECT COUNT(*) FROM address_labels WHERE verified = TRUE OR submitted_by IS NULL`
+  );
+  return Number(result.rows[0].count);
+}
+
+export async function submitAddressLabel(
+  address: string, label: string, category: string, description: string | undefined, userId: string
+) {
+  const pool = getReadPool();
+  await pool.query(
+    `INSERT INTO address_labels (address, label, category, description, verified, submitted_by, submitted_at)
+     VALUES ($1, $2, $3, $4, FALSE, $5, NOW())
+     ON CONFLICT (address) DO UPDATE SET
+       label = EXCLUDED.label, category = EXCLUDED.category,
+       description = EXCLUDED.description, verified = FALSE,
+       submitted_by = EXCLUDED.submitted_by, submitted_at = NOW(),
+       updated_at = NOW()`,
+    [address.toLowerCase(), label, category || 'other', description || null, userId]
+  );
+}
+
+export async function approveAddressLabel(address: string) {
+  const pool = getReadPool();
+  const result = await pool.query(
+    `UPDATE address_labels SET verified = TRUE, approved_at = NOW(), updated_at = NOW()
+     WHERE address = $1 RETURNING address, label, category`,
+    [address.toLowerCase()]
+  );
+  return result.rows[0] || null;
+}
+
 // --- Token Approvals ---
 
 export async function getTokenApprovalsByOwner(ownerAddress: string) {

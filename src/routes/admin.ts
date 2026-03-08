@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { getPool, getReadPool } from '../db/pool.js';
 import { getRateLimitStats, getConfig } from '../lib/rate-limit.js';
-import { upsertAddressLabel, listAddressLabels, searchAddressLabels } from '../db/queries.js';
+import { upsertAddressLabel, listAddressLabels, searchAddressLabels, approveAddressLabel } from '../db/queries.js';
 import { archiveBelow, getArchiveStatus } from '../lib/archive.js';
 import { getWsStats } from './ws.js';
 import { getRedisConfig } from '../lib/cache.js';
@@ -80,6 +80,7 @@ export default async function adminRoutes(app: FastifyInstance) {
       category?: string;
       description?: string;
       website?: string;
+      logo_url?: string;
     };
     if (!body.address || !body.label) {
       reply.status(400);
@@ -90,7 +91,7 @@ export default async function adminRoutes(app: FastifyInstance) {
       return { ok: false, error: 'Invalid address format' };
     }
     await upsertAddressLabel(body.address, body.label, body.category, body.description, body.website);
-    return { ok: true, data: { address: body.address.toLowerCase(), label: body.label } };
+    return { ok: true, data: { address: body.address.toLowerCase(), label: body.label, category: body.category } };
   });
 
   // POST /admin/labels/batch — bulk upsert address labels
@@ -139,16 +140,34 @@ export default async function adminRoutes(app: FastifyInstance) {
     };
   });
 
-  // GET /admin/labels — list address labels
+  // GET /admin/labels — list address labels (with optional ?category= and ?q= filter)
   app.get('/labels', async (request) => {
-    const { q, limit } = request.query as { q?: string; limit?: string };
+    const { q, limit, category } = request.query as { q?: string; limit?: string; category?: string };
     const max = Math.min(Number(limit) || 50, 200);
     if (q) {
       const labels = await searchAddressLabels(q, max);
-      return { ok: true, data: { labels } };
+      // Filter by category client-side if both q and category provided
+      const filtered = category ? labels.filter((l: { category?: string }) => l.category === category) : labels;
+      return { ok: true, data: { labels: filtered } };
     }
     const labels = await listAddressLabels(max);
-    return { ok: true, data: { labels } };
+    const filtered = category ? labels.filter((l: { category?: string }) => l.category === category) : labels;
+    return { ok: true, data: { labels: filtered } };
+  });
+
+  // POST /admin/labels/approve/:address — approve a user-submitted label
+  app.post('/labels/approve/:address', async (request, reply) => {
+    const { address } = request.params as { address: string };
+    if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
+      reply.status(400);
+      return { ok: false, error: 'Invalid address format' };
+    }
+    const result = await approveAddressLabel(address);
+    if (!result) {
+      reply.status(404);
+      return { ok: false, error: 'Label not found' };
+    }
+    return { ok: true, data: result };
   });
 
   // GET /admin/ws — WebSocket connection stats
