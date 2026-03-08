@@ -269,6 +269,27 @@ export async function getTokenHolders(tokenAddress: string, limit: number) {
   return result.rows;
 }
 
+export async function getRecentTokenTransfers(
+  limit: number, offset: number, order: 'asc' | 'desc' = 'desc', tokenType?: string
+) {
+  const pool = getReadPool();
+  const direction = order === 'asc' ? 'ASC' : 'DESC';
+  const typeFilter = tokenType ? 'AND t.token_type = $4' : '';
+  const params: unknown[] = [limit, offset];
+  if (tokenType) params.push(tokenType);
+  const result = await pool.query(
+    `SELECT tt.tx_hash, tt.block_height, tt.token_address, tt.from_address, tt.to_address,
+            tt.value, tt.token_id,
+            t.name AS token_name, t.symbol AS token_symbol, t.decimals AS token_decimals, t.token_type
+     FROM token_transfers tt LEFT JOIN tokens t ON t.address = tt.token_address
+     ${tokenType ? 'WHERE t.token_type = $3' : ''}
+     ORDER BY tt.block_height ${direction}, tt.log_index ${direction}
+     LIMIT $1 OFFSET $2`,
+    params
+  );
+  return result.rows;
+}
+
 export async function getTokenTransfersByAddress(
   address: string, limit: number, offset: number, order: 'asc' | 'desc' = 'desc'
 ) {

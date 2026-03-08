@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import {
   getTokensPage, getTokenByAddress, getTokenTransfers,
-  getTokenHolders, getNftHoldersByToken,
+  getTokenHolders, getNftHoldersByToken, getRecentTokenTransfers,
 } from '../db/queries.js';
 import { clamp, parseNumber, parseOrder } from '../lib/pagination.js';
 
@@ -15,6 +15,18 @@ export default async function tokensRoutes(app: FastifyInstance) {
     const offset = (page - 1) * limit;
     const items = await getTokensPage(limit, offset, order);
     return { ok: true, data: { page, limit, order, items } };
+  });
+
+  // GET /tokens/transfers — recent token transfers (all tokens)
+  app.get('/transfers', async (request) => {
+    const q = request.query as Record<string, string>;
+    const page = parseNumber(q.page, 1);
+    const limit = clamp(parseNumber(q.limit, 25), 1, 100);
+    const order = parseOrder(q.order);
+    const offset = (page - 1) * limit;
+    const type = q.type; // optional: 'ERC-20', 'ERC-721', 'ERC-1155'
+    const items = await getRecentTokenTransfers(limit, offset, order, type);
+    return { ok: true, data: { page, limit, order, type: type ?? null, items } };
   });
 
   // GET /tokens/:address

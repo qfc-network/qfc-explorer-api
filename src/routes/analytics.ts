@@ -78,6 +78,75 @@ export default async function analyticsRoutes(app: FastifyInstance) {
     return { ok: true, data };
   });
 
+  // GET /analytics/gas — gas tracker
+  app.get('/gas', async () => {
+    const data = await cached('analytics:gas', 15, async () => {
+      const pool = getReadPool();
+
+      // Gas prices from recent 200 transactions
+      const [priceStats, blockGas, topContracts] = await Promise.all([
+        pool.query(`
+          WITH recent_txs AS (
+            SELECT gas_price::numeric AS gp FROM transactions
+            WHERE gas_price IS NOT NULL AND gas_price != '0'
+            ORDER BY block_height DESC LIMIT 200
+          )
+          SELECT
+            MIN(gp) AS low,
+            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY gp) AS median,
+            AVG(gp)::numeric(30,0) AS average,
+            MAX(gp) AS high,
+            COUNT(*) AS sample_size
+          FROM recent_txs
+        `),
+        // Gas usage per block (last 50 blocks)
+        pool.query(`
+          SELECT height, gas_used, gas_limit, tx_count, timestamp_ms
+          FROM blocks WHERE height > 0
+          ORDER BY height DESC LIMIT 50
+        `),
+        // Top gas-consuming contracts (by total gas used in recent txs)
+        pool.query(`
+          WITH recent AS (
+            SELECT to_address, gas_used::numeric AS gu
+            FROM transactions
+            WHERE to_address IS NOT NULL AND gas_used IS NOT NULL
+            ORDER BY block_height DESC LIMIT 5000
+          )
+          SELECT to_address AS address, SUM(gu) AS total_gas, COUNT(*) AS tx_count
+          FROM recent
+          GROUP BY to_address
+          ORDER BY total_gas DESC
+          LIMIT 10
+        `),
+      ]);
+
+      const prices = priceStats.rows[0] ?? {};
+      return {
+        prices: {
+          low: prices.low?.toString() ?? '0',
+          median: prices.median?.toString() ?? '0',
+          average: prices.average?.toString() ?? '0',
+          high: prices.high?.toString() ?? '0',
+          sampleSize: Number(prices.sample_size ?? 0),
+        },
+        blocks: blockGas.rows.reverse().map((r: Record<string, unknown>) => ({
+          height: String(r.height),
+          gasUsed: String(r.gas_used ?? 0),
+          gasLimit: String(r.gas_limit ?? 0),
+          txCount: Number(r.tx_count ?? 0),
+          timestampMs: String(r.timestamp_ms),
+        })),
+        topContracts: topContracts.rows.map((r: Record<string, unknown>) => ({
+          address: String(r.address),
+          totalGas: String(r.total_gas),
+          txCount: Number(r.tx_count),
+        })),
+      };
+    });
+    return { ok: true, data };
+  });
+
   // GET /analytics/export
   app.get('/export', async (request, reply) => {
     const q = request.query as Record<string, string>;
