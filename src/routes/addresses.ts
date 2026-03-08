@@ -530,6 +530,38 @@ export default async function addressesRoutes(app: FastifyInstance) {
     return { ok: true, data: profile };
   });
 
+  // GET /address/:address/activity — daily transaction counts for heatmap
+  app.get('/:address/activity', async (request) => {
+    const { address } = request.params as { address: string };
+    const addr = address.toLowerCase();
+    const pool = getReadPool();
+
+    const cacheKey = `addr:activity:${addr}`;
+    const result = await cached(cacheKey, 300, async () => {
+      const cutoffMs = Date.now() - 365 * 86400000;
+
+      const { rows } = await pool.query(
+        `SELECT DATE(to_timestamp(b.timestamp_ms / 1000.0)) AS date, COUNT(*) AS count
+         FROM transactions t
+         JOIN blocks b ON b.height = t.block_height
+         WHERE (t.from_address = $1 OR t.to_address = $1)
+           AND b.timestamp_ms >= $2
+         GROUP BY date
+         ORDER BY date ASC`,
+        [addr, cutoffMs]
+      );
+
+      return {
+        days: rows.map((r: { date: string | Date; count: string }) => ({
+          date: typeof r.date === 'string' ? r.date : new Date(r.date).toISOString().slice(0, 10),
+          count: Number(r.count),
+        })),
+      };
+    });
+
+    return { ok: true, data: result };
+  });
+
   // GET /address/:address/multisig — detect Safe (Gnosis) multisig wallet
   app.get('/:address/multisig', async (request) => {
     const { address } = request.params as { address: string };
@@ -575,6 +607,140 @@ export default async function addressesRoutes(app: FastifyInstance) {
     );
 
     return { ok: true, data: { address, nfts: results } };
+  });
+
+  // GET /address/:address/balance-history — daily closing balance over time
+  app.get('/:address/balance-history', async (request) => {
+    const { address } = request.params as { address: string };
+    const q = request.query as Record<string, string>;
+    const allowedDays = [7, 30, 90, 365];
+    const days = allowedDays.includes(Number(q.days)) ? Number(q.days) : 30;
+    const addr = address.toLowerCase();
+    const pool = getReadPool();
+
+    const cacheKey = `addr:balhist:${addr}:${days}`;
+    const result = await cached(cacheKey, 60, async () => {
+      // Get all transactions involving this address, ordered by block_height ASC,
+      // with block timestamps for date grouping.
+      // We limit lookback to the requested number of days.
+      const cutoffMs = Date.now() - days * 86400000;
+
+      const txResult = await pool.query(
+        `SELECT t.from_address, t.to_address, t.value, t.gas_used, t.gas_price,
+                b.timestamp_ms
+         FROM transactions t
+         JOIN blocks b ON b.height = t.block_height
+         WHERE (t.from_address = $1 OR t.to_address = $1)
+           AND b.timestamp_ms >= $2
+         ORDER BY t.block_height ASC, t.tx_index ASC`,
+        [addr, cutoffMs]
+      );
+
+      // Also get current balance from accounts table
+      const balResult = await pool.query(
+        'SELECT balance FROM accounts WHERE address = $1',
+        [addr]
+      );
+      const currentBalance = String(balResult.rows[0]?.balance ?? '0');
+
+      if (txResult.rows.length === 0) {
+        return { points: [], current_balance: currentBalance };
+      }
+
+      // To compute historical daily closing balance, we work backwards from
+      // the current balance. First, compute the net effect of each transaction.
+      // Then, walk backwards from current balance to reconstruct past balances.
+
+      // Group transactions by date (day string YYYY-MM-DD)
+      type DayGroup = { date: string; netChange: bigint };
+      const dayMap = new Map<string, bigint>();
+
+      for (const row of txResult.rows as Array<{
+        from_address: string;
+        to_address: string | null;
+        value: string;
+        gas_used: string;
+        gas_price: string;
+        timestamp_ms: string;
+      }>) {
+        const dateStr = new Date(Number(row.timestamp_ms)).toISOString().slice(0, 10);
+        let net = dayMap.get(dateStr) ?? 0n;
+
+        // Parse value
+        let val = 0n;
+        try {
+          const v = row.value;
+          if (v && v !== '0') {
+            val = v.startsWith('0x') ? BigInt(v) : BigInt(v);
+          }
+        } catch {
+          // skip
+        }
+
+        const isSender = row.from_address === addr;
+        const isReceiver = row.to_address === addr;
+
+        if (isSender) {
+          net -= val;
+          // Subtract gas cost
+          try {
+            const gasUsed = row.gas_used && /^\d+$/.test(row.gas_used) ? BigInt(row.gas_used) : 0n;
+            const gasPrice = row.gas_price && /^\d+$/.test(row.gas_price) ? BigInt(row.gas_price) : 0n;
+            net -= gasUsed * gasPrice;
+          } catch {
+            // skip
+          }
+        }
+        if (isReceiver) {
+          net += val;
+        }
+
+        dayMap.set(dateStr, net);
+      }
+
+      // Sort days ascending
+      const sortedDays = Array.from(dayMap.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]));
+
+      // Compute total net change of all these transactions
+      let totalNet = 0n;
+      for (const [, net] of sortedDays) {
+        totalNet += net;
+      }
+
+      // The balance at the start of the period = currentBalance - totalNet
+      // Then accumulate forward to get closing balance each day
+      let runningBalance: bigint;
+      try {
+        runningBalance = BigInt(currentBalance) - totalNet;
+      } catch {
+        runningBalance = 0n;
+      }
+
+      // Fill all days in the range (even days without tx)
+      const startDate = new Date(cutoffMs);
+      startDate.setUTCHours(0, 0, 0, 0);
+      const endDate = new Date();
+      endDate.setUTCHours(0, 0, 0, 0);
+
+      const points: Array<{ date: string; balance: string }> = [];
+      const dayNetMap = new Map(sortedDays);
+
+      const d = new Date(startDate);
+      while (d <= endDate) {
+        const dateStr = d.toISOString().slice(0, 10);
+        const dayNet = dayNetMap.get(dateStr) ?? 0n;
+        runningBalance += dayNet;
+        // Ensure non-negative display
+        const displayBalance = runningBalance < 0n ? 0n : runningBalance;
+        points.push({ date: dateStr, balance: displayBalance.toString() });
+        d.setUTCDate(d.getUTCDate() + 1);
+      }
+
+      return { points, current_balance: currentBalance };
+    });
+
+    return { ok: true, data: result };
   });
 }
 
