@@ -302,7 +302,7 @@ export async function getAddressTransactions(
   const pool = getReadPool();
   const direction = order === 'asc' ? 'ASC' : 'DESC';
   const result = await pool.query(
-    `SELECT hash, block_height, from_address, to_address, value, status
+    `SELECT hash, block_height, from_address, to_address, value, status, input_data
      FROM transactions WHERE from_address = $1 OR to_address = $1
      ORDER BY block_height ${direction}, tx_index ${direction}
      LIMIT $2 OFFSET $3`,
@@ -783,6 +783,158 @@ export async function getTokenApprovalsByOwner(ownerAddress: string) {
     [ownerPadded]
   );
   return result.rows;
+}
+
+// --- Contract Event Logs ---
+
+/** Known event topic0 hashes for name resolution (fallback when ABI not available) */
+const KNOWN_EVENT_NAMES: Record<string, string> = {
+  '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef': 'Transfer',
+  '0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925': 'Approval',
+  '0xe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c': 'Deposit',
+  '0x7fcf532c15f0a6db0bd6d0e038bea71d30d808c7d98cb3bf7268a95bf5081b65': 'Withdrawal',
+  '0x17307eab39ab6107e8899845ad3d59bd9653f200f220920489ca2b5937696c31': 'ApprovalForAll',
+  '0xc3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62': 'TransferSingle',
+  '0x4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8c0526c8f7fb': 'TransferBatch',
+  '0x8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e0': 'OwnershipTransferred',
+};
+
+/**
+ * Get event logs for a contract address, with optional event name filter.
+ * Resolves event_name from ABI (if verified) or falls back to KNOWN_EVENT_NAMES.
+ */
+export async function getEventsByContractAddress(
+  contractAddress: string,
+  limit: number,
+  offset: number,
+  order: string,
+  eventFilter?: string | null,
+): Promise<Array<Record<string, unknown>>> {
+  const pool = getReadPool();
+  const addr = contractAddress.toLowerCase();
+  const direction = order === 'asc' ? 'ASC' : 'DESC';
+
+  const params: (string | number)[] = [addr, limit, offset];
+  let filterClause = '';
+
+  if (eventFilter) {
+    // Filter by topic0 matching the event filter name
+    // Find matching topic0s from known events
+    const matchingTopics: string[] = [];
+    for (const [topic, name] of Object.entries(KNOWN_EVENT_NAMES)) {
+      if (name.toLowerCase() === eventFilter.toLowerCase()) {
+        matchingTopics.push(topic);
+      }
+    }
+
+    if (matchingTopics.length > 0) {
+      params.push(matchingTopics[0]);
+      filterClause = ` AND e.topic0 = $${params.length}`;
+    } else {
+      // Try ABI-based matching: look up contract ABI for the topic0
+      const abiResult = await pool.query(
+        'SELECT abi FROM contracts WHERE address = $1 AND is_verified = true AND abi IS NOT NULL LIMIT 1',
+        [addr]
+      );
+      if (abiResult.rows.length > 0) {
+        try {
+          const { indexAbi } = await import('../lib/abi-decoder.js');
+          let abi: unknown[];
+          const raw = abiResult.rows[0].abi;
+          if (typeof raw === 'string') {
+            abi = JSON.parse(raw);
+          } else {
+            abi = raw as unknown[];
+          }
+          const { events: evts } = indexAbi(abi as import('../lib/abi-decoder.js').AbiItem[]);
+          for (const [topic0, entry] of evts) {
+            if (entry.item.name?.toLowerCase() === eventFilter.toLowerCase()) {
+              params.push(topic0);
+              filterClause = ` AND e.topic0 = $${params.length}`;
+              break;
+            }
+          }
+        } catch {
+          // skip ABI parse errors
+        }
+      }
+    }
+  }
+
+  const result = await pool.query(
+    `SELECT e.tx_hash, e.block_height, e.log_index, e.contract_address,
+            e.topic0, e.topic1, e.topic2, e.topic3, e.data
+     FROM events e
+     WHERE e.contract_address = $1${filterClause}
+     ORDER BY e.block_height ${direction}, e.log_index ${direction}
+     LIMIT $2 OFFSET $3`,
+    params
+  );
+
+  // Convert data bytea to hex string
+  return result.rows.map((row: Record<string, unknown>) => ({
+    ...row,
+    data: row.data ? '0x' + (Buffer.isBuffer(row.data) ? (row.data as Buffer).toString('hex') : String(row.data)) : null,
+  }));
+}
+
+/**
+ * Get event counts grouped by topic0 (event type) for a contract address.
+ * Returns event name + count for each unique topic0.
+ */
+export async function getEventCountsByContract(
+  contractAddress: string
+): Promise<Array<{ event_name: string; topic0: string; count: number }>> {
+  const pool = getReadPool();
+  const addr = contractAddress.toLowerCase();
+
+  const result = await pool.query(
+    `SELECT topic0, COUNT(*)::int AS count
+     FROM events
+     WHERE contract_address = $1 AND topic0 IS NOT NULL
+     GROUP BY topic0
+     ORDER BY count DESC
+     LIMIT 50`,
+    [addr]
+  );
+
+  // Resolve event names from known topics or ABI
+  let abiEvents: Map<string, { item: { name?: string }; signature: string; topic0: string }> | null = null;
+  try {
+    const abiResult = await pool.query(
+      'SELECT abi FROM contracts WHERE address = $1 AND is_verified = true AND abi IS NOT NULL LIMIT 1',
+      [addr]
+    );
+    if (abiResult.rows.length > 0) {
+      const { indexAbi } = await import('../lib/abi-decoder.js');
+      let abi: unknown[];
+      const raw = abiResult.rows[0].abi;
+      if (typeof raw === 'string') {
+        abi = JSON.parse(raw);
+      } else {
+        abi = raw as unknown[];
+      }
+      abiEvents = indexAbi(abi as import('../lib/abi-decoder.js').AbiItem[]).events;
+    }
+  } catch {
+    // skip
+  }
+
+  return result.rows.map((row: { topic0: string; count: number }) => {
+    let eventName: string | null = KNOWN_EVENT_NAMES[row.topic0] ?? null;
+
+    // Try ABI lookup
+    if (!eventName && abiEvents) {
+      const entry = abiEvents.get(row.topic0.toLowerCase());
+      if (entry) eventName = entry.item.name ?? null;
+    }
+
+    return {
+      event_name: eventName ?? row.topic0.slice(0, 10) + '...',
+      topic0: row.topic0,
+      count: row.count,
+    };
+  });
 }
 
 // --- Full-text Search ---
