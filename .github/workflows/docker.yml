@@ -107,7 +107,7 @@ jobs:
             $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
 
       - name: Update qfc-testnet image tag
-        if: github.ref_type == 'branch' && secrets.TESTNET_DISPATCH_TOKEN != ''
+        if: github.ref_type == 'branch'
         continue-on-error: true
         env:
           SHORT_SHA: ${{ github.sha }}
