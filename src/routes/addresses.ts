@@ -195,6 +195,151 @@ export default async function addressesRoutes(app: FastifyInstance) {
     return csv;
   });
 
+  // GET /address/:address/txs/export — Enhanced CSV export with date range, timestamps, gas gwei
+  // Query params: from_date (ISO), to_date (ISO), limit (max 5000, default 1000)
+  app.get('/:address/txs/export', async (request, reply) => {
+    const { address } = request.params as { address: string };
+    const q = request.query as Record<string, string>;
+    const limit = clamp(parseNumber(q.limit, 1000), 1, 5000);
+    const addr = address.toLowerCase();
+    const pool = getReadPool();
+
+    // Parse date range
+    let fromMs: number | null = null;
+    let toMs: number | null = null;
+    if (q.from_date) {
+      const ts = new Date(q.from_date).getTime();
+      if (!isNaN(ts)) fromMs = ts;
+    }
+    if (q.to_date) {
+      const ts = new Date(q.to_date).getTime();
+      if (!isNaN(ts)) toMs = ts + 86400000; // end of day
+    }
+
+    // Resolve date range to block heights
+    let startBlock: string | null = null;
+    let endBlock: string | null = null;
+    if (fromMs !== null) {
+      const r = await pool.query('SELECT MIN(height) AS h FROM blocks WHERE timestamp_ms >= $1', [fromMs]);
+      startBlock = r.rows[0]?.h ?? null;
+    }
+    if (toMs !== null) {
+      const r = await pool.query('SELECT MAX(height) AS h FROM blocks WHERE timestamp_ms < $1', [toMs]);
+      endBlock = r.rows[0]?.h ?? null;
+    }
+
+    // Build query with block timestamp join
+    const params: (string | number)[] = [addr, limit];
+    let dateFilter = '';
+    if (startBlock) { params.push(startBlock); dateFilter += ` AND t.block_height >= $${params.length}`; }
+    if (endBlock) { params.push(endBlock); dateFilter += ` AND t.block_height <= $${params.length}`; }
+
+    const result = await pool.query(
+      `SELECT t.hash, t.block_height, b.timestamp_ms, t.from_address, t.to_address,
+              t.value, t.gas_used, t.gas_price, t.status, t.input
+       FROM transactions t
+       JOIN blocks b ON b.height = t.block_height
+       WHERE (t.from_address = $1 OR t.to_address = $1)${dateFilter}
+       ORDER BY t.block_height DESC, t.tx_index DESC
+       LIMIT $2`,
+      params
+    );
+
+    // Get estimated total count (for header)
+    const countParams: (string | number)[] = [addr];
+    let countDateFilter = '';
+    if (startBlock) { countParams.push(startBlock); countDateFilter += ` AND block_height >= $${countParams.length}`; }
+    if (endBlock) { countParams.push(endBlock); countDateFilter += ` AND block_height <= $${countParams.length}`; }
+    const countResult = await pool.query(
+      `SELECT COUNT(*) AS total FROM transactions WHERE (from_address = $1 OR to_address = $1)${countDateFilter}`,
+      countParams
+    );
+    const totalCount = Number(countResult.rows[0]?.total ?? 0);
+
+    // CSV helper: escape fields containing commas, quotes, or newlines
+    function csvEscape(val: string): string {
+      if (val.includes(',') || val.includes('"') || val.includes('\n') || val.includes('\r')) {
+        return '"' + val.replace(/"/g, '""') + '"';
+      }
+      return val;
+    }
+
+    // Format value from wei to QFC
+    function weiToQfc(weiStr: string): string {
+      try {
+        if (!weiStr || weiStr === '0' || weiStr === '0x0') return '0';
+        let wei: bigint;
+        if (weiStr.startsWith('0x')) {
+          wei = BigInt(weiStr);
+        } else {
+          wei = BigInt(weiStr);
+        }
+        const whole = wei / 1000000000000000000n;
+        const frac = wei % 1000000000000000000n;
+        if (frac === 0n) return whole.toString();
+        const fracStr = frac.toString().padStart(18, '0').replace(/0+$/, '');
+        return `${whole}.${fracStr}`;
+      } catch {
+        return weiStr;
+      }
+    }
+
+    // Format gas price from wei to gwei
+    function weiToGwei(weiStr: string): string {
+      try {
+        if (!weiStr || weiStr === '0') return '0';
+        const wei = BigInt(weiStr);
+        const gwei = wei / 1000000000n;
+        const fracWei = wei % 1000000000n;
+        if (fracWei === 0n) return gwei.toString();
+        const fracStr = fracWei.toString().padStart(9, '0').replace(/0+$/, '');
+        return `${gwei}.${fracStr}`;
+      } catch {
+        return weiStr;
+      }
+    }
+
+    // Extract method selector from input data
+    function extractMethod(input: string | Buffer | null): string {
+      if (!input) return '';
+      const hex = Buffer.isBuffer(input) ? input.toString('hex') : String(input);
+      if (!hex || hex === '' || hex === '0x') return 'transfer';
+      const clean = hex.startsWith('0x') ? hex.slice(2) : hex;
+      if (clean.length < 8) return 'transfer';
+      return '0x' + clean.slice(0, 8);
+    }
+
+    // Build CSV rows
+    const headers = ['Hash', 'Block', 'Timestamp', 'From', 'To', 'Value (QFC)', 'Gas Used', 'Gas Price (Gwei)', 'Status', 'Method'];
+    const rows: string[] = [headers.join(',')];
+
+    for (const r of result.rows as Array<Record<string, unknown>>) {
+      const timestamp = r.timestamp_ms
+        ? new Date(Number(r.timestamp_ms)).toISOString()
+        : '';
+      const row = [
+        csvEscape(String(r.hash ?? '')),
+        csvEscape(String(r.block_height ?? '')),
+        csvEscape(timestamp),
+        csvEscape(String(r.from_address ?? '')),
+        csvEscape(String(r.to_address ?? '')),
+        csvEscape(weiToQfc(String(r.value ?? '0'))),
+        csvEscape(String(r.gas_used ?? '')),
+        csvEscape(weiToGwei(String(r.gas_price ?? '0'))),
+        csvEscape(String(r.status ?? '')),
+        csvEscape(extractMethod(r.input as string | Buffer | null)),
+      ];
+      rows.push(row.join(','));
+    }
+
+    const csv = rows.join('\n');
+
+    reply.header('Content-Type', 'text/csv');
+    reply.header('Content-Disposition', `attachment; filename=qfc-${addr.slice(0, 10)}-txs-export.csv`);
+    reply.header('X-Total-Count', String(totalCount));
+    return csv;
+  });
+
   // GET /address/:address/approvals — token approval checker
   app.get('/:address/approvals', async (request) => {
     const { address } = request.params as { address: string };
