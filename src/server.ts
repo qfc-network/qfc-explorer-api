@@ -32,6 +32,8 @@ import approvalRoutes from './routes/approvals.js';
 import notesRoutes from './routes/notes.js';
 import labelsRoutes from './routes/labels.js';
 import statsRoutes from './routes/stats.js';
+import gasOracleRoutes from './routes/gas-oracle.js';
+import batchRoutes from './routes/batch.js';
 import { apiKeyAuth } from './middleware/apikey-auth.js';
 
 const PORT = Number(process.env.PORT || 3001);
@@ -111,6 +113,8 @@ await app.register(approvalRoutes, { prefix: '/approvals' });
 await app.register(notesRoutes, { prefix: '/notes' });
 await app.register(labelsRoutes, { prefix: '/labels' });
 await app.register(statsRoutes, { prefix: '/stats' });
+await app.register(gasOracleRoutes, { prefix: '/gas-oracle' });
+await app.register(batchRoutes, { prefix: '/batch' });
 
 // Global API key authentication hook
 app.addHook('onRequest', apiKeyAuth);
