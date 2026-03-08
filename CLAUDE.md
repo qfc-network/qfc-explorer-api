@@ -175,6 +175,8 @@ Refreshes `daily_stats` table after each batch.
 | `INDEXER_BLOCK_RETRIES` | `3` | Retry attempts per block on failure |
 | `INDEXER_SKIP_ON_ERROR` | `false` | Skip failed blocks instead of halting |
 | `INDEXER_RETRY_FAILED` | `false` | Retry previously failed blocks on startup |
+| `INDEXER_BATCH_SIZE` | `10` | Initial batch size (dynamically adjusted 1–50) |
+| `INDEXER_WS_URL` | — | WebSocket endpoint for newHeads subscription (optional, falls back to polling) |
 | `INDEXER_METRICS_PORT` | `9090` | Indexer Prometheus metrics port |
 
 ## Related Repos

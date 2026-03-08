@@ -16,6 +16,57 @@ import {
   txsProcessed, indexerHeight, chainHeight, indexerLag,
   batchDuration, batchSize,
 } from './metrics.js';
+import { WsSubscriber } from './ws-subscriber.js';
+
+/* ------------------------------------------------------------------ */
+/*  Dynamic batch size controller                                      */
+/* ------------------------------------------------------------------ */
+
+const BATCH_SIZE_MIN = 1;
+const BATCH_SIZE_MAX = 50;
+const SPEED_THRESHOLD_FAST = 10; // blocks/sec → increase batch size
+const SPEED_THRESHOLD_SLOW = 2;  // blocks/sec → decrease batch size
+
+class DynamicBatchSize {
+  private current: number;
+
+  constructor(initial: number) {
+    this.current = Math.max(BATCH_SIZE_MIN, Math.min(BATCH_SIZE_MAX, initial));
+  }
+
+  get value(): number {
+    return this.current;
+  }
+
+  /**
+   * Adjust batch size based on observed processing speed.
+   * Called after each batch completes.
+   */
+  adjust(blocksProcessed: number, durationMs: number): void {
+    if (blocksProcessed === 0 || durationMs === 0) return;
+
+    const blocksPerSec = blocksProcessed / (durationMs / 1000);
+    const prev = this.current;
+
+    if (blocksPerSec > SPEED_THRESHOLD_FAST) {
+      // Processing is fast — increase batch size
+      this.current = Math.min(BATCH_SIZE_MAX, Math.ceil(this.current * 1.5));
+    } else if (blocksPerSec < SPEED_THRESHOLD_SLOW) {
+      // Processing is slow — decrease batch size
+      this.current = Math.max(BATCH_SIZE_MIN, Math.floor(this.current * 0.5));
+    }
+
+    if (this.current !== prev) {
+      console.log(
+        `[Batch] Size adjusted: ${prev} → ${this.current} (speed: ${blocksPerSec.toFixed(2)} blocks/sec)`
+      );
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Block indexing pipeline                                            */
+/* ------------------------------------------------------------------ */
 
 /**
  * Index a single block through the full pipeline:
@@ -88,6 +139,7 @@ async function runOnce(
   useFinalized: boolean,
   blockRetries: number,
   skipOnError: boolean,
+  dynamicBatch: DynamicBatchSize,
   maxHeight: bigint | null = null
 ): Promise<bigint> {
   const latestHex = await rpc.callWithRetry<string>('eth_blockNumber');
@@ -95,6 +147,18 @@ async function runOnce(
   chainHeight.set(Number(latest));
   const target = useFinalized ? await resolveFinalizedHeight(rpc, latest) : latest;
   const effectiveTarget = maxHeight !== null && maxHeight < target ? maxHeight : target;
+
+  if (startHeight > effectiveTarget) {
+    console.log(`Indexer up to date at height ${effectiveTarget}`);
+    return effectiveTarget;
+  }
+
+  // Limit how many blocks we process in this batch via dynamic batch size
+  const batchLimit = BigInt(dynamicBatch.value);
+  const batchEnd = startHeight + batchLimit - 1n < effectiveTarget
+    ? startHeight + batchLimit - 1n
+    : effectiveTarget;
+
   const startedAt = Date.now();
   const endBatch = batchDuration.startTimer();
   let totalTxs = 0;
@@ -102,13 +166,8 @@ async function runOnce(
   let indexedBlocks = 0;
   let skippedBlocks = 0;
 
-  if (startHeight > effectiveTarget) {
-    console.log(`Indexer up to date at height ${effectiveTarget}`);
-    return effectiveTarget;
-  }
-
-  console.log(`Indexing from ${startHeight} to ${effectiveTarget}`);
-  for (let height = startHeight; height <= effectiveTarget; height += 1n) {
+  console.log(`Indexing from ${startHeight} to ${batchEnd} (batch size: ${dynamicBatch.value}, chain head: ${effectiveTarget})`);
+  for (let height = startHeight; height <= batchEnd; height += 1n) {
     console.log(`Indexing block ${height}`);
     const txCount = await indexBlockWithRetry(rpc, height, blockRetries, skipOnError);
     if (txCount === null && skipOnError) {
@@ -122,16 +181,19 @@ async function runOnce(
   }
 
   endBatch();
-  console.log('Indexing complete');
   const durationMs = Date.now() - startedAt;
   batchSize.set(indexedBlocks);
-  indexerLag.set(Number(latest) - Number(effectiveTarget));
+  indexerLag.set(Number(latest) - Number(batchEnd));
   const tps = durationMs > 0 ? (totalTxs / (durationMs / 1000)).toFixed(2) : '0';
   console.log(
     `Batch stats: blocks=${indexedBlocks}, skipped=${skippedBlocks}, txs=${totalTxs}, receipts=${totalReceipts}, duration=${durationMs}ms, tps=${tps}`
   );
+
+  // Adjust dynamic batch size based on processing speed
+  dynamicBatch.adjust(indexedBlocks, durationMs);
+
   await setLastBatchStats({
-    height: effectiveTarget,
+    height: batchEnd,
     blocks: indexedBlocks,
     txs: totalTxs,
     receipts: totalReceipts,
@@ -142,8 +204,12 @@ async function runOnce(
     console.warn('Failed to refresh daily stats:', e)
   );
 
-  return effectiveTarget;
+  return batchEnd;
 }
+
+/* ------------------------------------------------------------------ */
+/*  Main run loop                                                      */
+/* ------------------------------------------------------------------ */
 
 async function run(): Promise<void> {
   const rpcUrl = process.env.RPC_URL;
@@ -165,6 +231,11 @@ async function run(): Promise<void> {
   const skipOnError = process.env.INDEXER_SKIP_ON_ERROR === 'true';
   const retryFailed = process.env.INDEXER_RETRY_FAILED === 'true';
 
+  const initialBatchSize = process.env.INDEXER_BATCH_SIZE
+    ? Number(process.env.INDEXER_BATCH_SIZE)
+    : 10;
+  const dynamicBatch = new DynamicBatchSize(initialBatchSize);
+
   const metricsPort = process.env.INDEXER_METRICS_PORT
     ? Number(process.env.INDEXER_METRICS_PORT)
     : 9090;
@@ -172,6 +243,17 @@ async function run(): Promise<void> {
 
   const archiveUrl = process.env.RPC_ARCHIVE_URL || undefined;
   const rpc = new RpcClient(rpcUrl, archiveUrl);
+
+  // --- WebSocket newHeads subscription (optional) ---
+  const wsUrl = process.env.INDEXER_WS_URL;
+  let wsSubscriber: WsSubscriber | null = null;
+  if (wsUrl) {
+    console.log(`[WS] Enabling WebSocket newHeads subscription: ${wsUrl}`);
+    wsSubscriber = new WsSubscriber(wsUrl);
+    wsSubscriber.start();
+  } else {
+    console.log('[WS] No INDEXER_WS_URL set — using polling only');
+  }
 
   const lastProcessed = await getLastProcessedHeight();
   let current = lastProcessed !== null ? lastProcessed + 1n : startHeight;
@@ -207,21 +289,57 @@ async function run(): Promise<void> {
     }
   }
 
+  // One-shot mode: index up to endHeight and exit
   if (endHeight !== null) {
-    await runOnce(rpc, current, useFinalized, blockRetries, skipOnError, endHeight);
+    // In one-shot mode, process all blocks up to endHeight without dynamic batching
+    let pos = current;
+    while (pos <= endHeight) {
+      const reached = await runOnce(rpc, pos, useFinalized, blockRetries, skipOnError, dynamicBatch, endHeight);
+      pos = reached + 1n;
+      if (reached >= endHeight) break;
+    }
+    wsSubscriber?.stop();
     return;
   }
 
-  await runOnce(rpc, current, useFinalized, blockRetries, skipOnError);
+  // Initial catch-up: process all pending blocks in batches
+  let catching = true;
+  while (catching) {
+    const last = await getLastProcessedHeight();
+    current = last !== null ? last + 1n : startHeight;
+    const reached = await runOnce(rpc, current, useFinalized, blockRetries, skipOnError, dynamicBatch);
+    // If we processed fewer blocks than the batch size, we've caught up
+    const processed = Number(reached - current) + 1;
+    if (reached >= current && processed < dynamicBatch.value) {
+      catching = false;
+    }
+    // Check if we're already at the tip
+    if (reached <= current) {
+      catching = false;
+    }
+  }
 
-  // Continuous polling mode
+  // Continuous mode: poll or wait for WS notifications
   while (pollIntervalMs > 0) {
-    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    if (wsSubscriber) {
+      // Wait for a new head notification or fall back to polling interval
+      const gotNewHead = await wsSubscriber.waitForNewHead(pollIntervalMs);
+      if (gotNewHead) {
+        console.log('[WS] New head received, processing immediately');
+      }
+      // Whether we got a WS notification or timed out, check for new blocks
+    } else {
+      // Pure polling mode
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
+
     const last = await getLastProcessedHeight();
     current = last !== null ? last + 1n : startHeight;
     await applyAdminCommands();
-    await runOnce(rpc, current, useFinalized, blockRetries, skipOnError);
+    await runOnce(rpc, current, useFinalized, blockRetries, skipOnError, dynamicBatch);
   }
+
+  wsSubscriber?.stop();
 }
 
 run().catch((error) => {

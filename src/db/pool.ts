@@ -2,6 +2,9 @@ import pg from 'pg';
 
 const { Pool } = pg;
 
+/** Threshold in milliseconds — queries slower than this get logged. */
+const SLOW_QUERY_THRESHOLD_MS = 500;
+
 /**
  * PostgreSQL connection pool with read/write split.
  *
@@ -75,4 +78,46 @@ export function getPoolConfig() {
     writePoolSize: writePool?.totalCount ?? 0,
     readPoolSize: readPool?.totalCount ?? 0,
   };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Slow query monitoring                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Execute a query with timing. Logs a warning for queries exceeding
+ * SLOW_QUERY_THRESHOLD_MS (default 500ms).
+ *
+ * Drop-in replacement for `pool.query(...)` — accepts the same arguments.
+ *
+ * Usage:
+ *   import { timedQuery, getPool } from '../db/pool.js';
+ *   const result = await timedQuery(getPool(), 'SELECT ...', [params]);
+ */
+export async function timedQuery<T extends pg.QueryResultRow = any>(
+  pool: pg.Pool,
+  textOrConfig: string | pg.QueryConfig,
+  values?: unknown[],
+): Promise<pg.QueryResult<T>> {
+  const start = performance.now();
+  try {
+    const result = values !== undefined
+      ? await pool.query<T>(textOrConfig as string, values as any[])
+      : await pool.query<T>(textOrConfig);
+    return result;
+  } finally {
+    const durationMs = performance.now() - start;
+    if (durationMs >= SLOW_QUERY_THRESHOLD_MS) {
+      const queryText = typeof textOrConfig === 'string'
+        ? textOrConfig
+        : textOrConfig.text;
+      // Truncate very long query text for readability
+      const truncated = queryText.length > 200
+        ? queryText.slice(0, 200) + '...'
+        : queryText;
+      console.warn(
+        `[Slow Query] ${durationMs.toFixed(1)}ms — ${truncated}`
+      );
+    }
+  }
 }

@@ -1,10 +1,10 @@
 import { FastifyInstance } from 'fastify';
 import {
-  getTransactionsPage, getTransactionByHash, getReceiptLogsByTxHash,
+  getTransactionsPage, getTransactionsByCursor, getTransactionByHash, getReceiptLogsByTxHash,
   getInternalTxsByTxHash,
 } from '../db/queries.js';
 import { rpcCallSafe } from '../lib/rpc.js';
-import { clamp, parseNumber, parseOrder } from '../lib/pagination.js';
+import { clamp, parseNumber, parseOrder, parseTxCursor, encodeTxCursor } from '../lib/pagination.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getReadPool } from '../db/pool.js';
 import { decodeFunction, decodeEvent, getContractAbi } from '../lib/abi-decoder.js';
@@ -14,15 +14,35 @@ export default async function transactionsRoutes(app: FastifyInstance) {
   // GET /txs — paginated list
   app.get('/', async (request) => {
     const q = request.query as Record<string, string>;
-    const page = parseNumber(q.page, 1);
     const limit = clamp(parseNumber(q.limit, 25), 1, 100);
     const order = parseOrder(q.order);
-    const offset = (page - 1) * limit;
     const filters: { address?: string; status?: string } = {};
     if (q.address) filters.address = q.address;
     if (q.status) filters.status = q.status;
+
+    // Cursor-based pagination (takes priority if provided)
+    if (q.cursor) {
+      const cur = parseTxCursor(q.cursor);
+      if (!cur) {
+        return { ok: false, error: 'Invalid cursor' };
+      }
+      const items = await getTransactionsByCursor(limit, cur.block_height, cur.tx_index, order, filters);
+      const next_cursor = items.length === limit
+        ? encodeTxCursor(items[items.length - 1].block_height, String(items[items.length - 1].tx_index))
+        : null;
+      return { ok: true, data: { limit, order, address: q.address, status: q.status, items, next_cursor } };
+    }
+
+    // Offset-based pagination (default)
+    const page = parseNumber(q.page, 1);
+    const offset = (page - 1) * limit;
     const items = await getTransactionsPage(limit, offset, order, filters);
-    return { ok: true, data: { page, limit, order, address: q.address, status: q.status, items } };
+    // Generate a cursor from the last item if we have a full page
+    const last = items.length === limit ? items[items.length - 1] as Record<string, unknown> : null;
+    const next_cursor = last
+      ? encodeTxCursor(String(last.block_height), String(last.tx_index ?? '0'))
+      : null;
+    return { ok: true, data: { page, limit, order, address: q.address, status: q.status, items, next_cursor } };
   });
 
   // GET /txs/:hash
