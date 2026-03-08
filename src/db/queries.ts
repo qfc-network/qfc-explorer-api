@@ -18,6 +18,7 @@ export type TransactionRow = {
   status: string;
   gas_limit?: string;
   data?: string | null;
+  input_data?: string | null;
 };
 
 export type TxFilters = {
@@ -152,7 +153,7 @@ export async function getTransactionsByCursor(
 
   const where = `WHERE ${clauses.join(' AND ')}`;
   const result = await pool.query(
-    `SELECT hash, block_height, tx_index, from_address, to_address, value, status
+    `SELECT hash, block_height, tx_index, from_address, to_address, value, status, input_data
      FROM transactions ${where}
      ORDER BY block_height ${direction}, tx_index ${direction}
      LIMIT $1`,
@@ -220,7 +221,7 @@ export async function getTransactionsPage(
 
   const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
   const result = await pool.query(
-    `SELECT hash, block_height, tx_index, from_address, to_address, value, status
+    `SELECT hash, block_height, tx_index, from_address, to_address, value, status, input_data
      FROM transactions ${where}
      ORDER BY block_height ${direction}, tx_index ${direction}
      LIMIT $1 OFFSET $2`,

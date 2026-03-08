@@ -9,6 +9,10 @@ import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getReadPool } from '../db/pool.js';
 import { decodeFunction, decodeEvent, getContractAbi } from '../lib/abi-decoder.js';
 import { queryArchiveTransactionByHash, queryArchiveEventsByTxHash, queryArchiveInternalTxsByTxHash } from '../lib/archive.js';
+import { identifyTransaction } from '../lib/defi-protocols.js';
+
+// Transfer event topic: keccak256("Transfer(address,address,uint256)")
+const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 
 export default async function transactionsRoutes(app: FastifyInstance) {
   // GET /txs — paginated list
@@ -37,9 +41,14 @@ export default async function transactionsRoutes(app: FastifyInstance) {
       if (!cur) {
         return { ok: false, error: 'Invalid cursor' };
       }
-      const items = await getTransactionsByCursor(limit, cur.block_height, cur.tx_index, order, filters);
+      const rawItems = await getTransactionsByCursor(limit, cur.block_height, cur.tx_index, order, filters);
+      const items = rawItems.map((item) => {
+        const defi_label = identifyTransaction(item.input_data, item.to_address, item.value) || undefined;
+        const { input_data: _input, ...rest } = item as Record<string, unknown>;
+        return { ...rest, ...(defi_label ? { defi_label } : {}) };
+      });
       const next_cursor = items.length === limit
-        ? encodeTxCursor(items[items.length - 1].block_height, String(items[items.length - 1].tx_index))
+        ? encodeTxCursor(String((items[items.length - 1] as Record<string, unknown>).block_height), String((rawItems[rawItems.length - 1] as Record<string, unknown>).tx_index))
         : null;
       return { ok: true, data: { limit, order, address: q.address, status: q.status, items, next_cursor } };
     }
@@ -47,9 +56,14 @@ export default async function transactionsRoutes(app: FastifyInstance) {
     // Offset-based pagination (default)
     const page = parseNumber(q.page, 1);
     const offset = (page - 1) * limit;
-    const items = await getTransactionsPage(limit, offset, order, filters);
+    const rawItems = await getTransactionsPage(limit, offset, order, filters);
+    const items = rawItems.map((item) => {
+      const defi_label = identifyTransaction(item.input_data, item.to_address, item.value) || undefined;
+      const { input_data: _input, ...rest } = item as Record<string, unknown>;
+      return { ...rest, ...(defi_label ? { defi_label } : {}) };
+    });
     // Generate a cursor from the last item if we have a full page
-    const last = items.length === limit ? items[items.length - 1] as Record<string, unknown> : null;
+    const last = rawItems.length === limit ? rawItems[rawItems.length - 1] as Record<string, unknown> : null;
     const next_cursor = last
       ? encodeTxCursor(String(last.block_height), String(last.tx_index ?? '0'))
       : null;
@@ -96,6 +110,9 @@ export default async function transactionsRoutes(app: FastifyInstance) {
         }
       }
 
+      // Identify DeFi action from input data selector
+      const defi_label = identifyTransaction(tx.data, tx.to_address, tx.value) || undefined;
+
       const data = {
         transaction: {
           ...tx,
@@ -103,6 +120,7 @@ export default async function transactionsRoutes(app: FastifyInstance) {
           contract_address: receipt?.contractAddress ?? null,
           decoded_input: decodedInput,
         },
+        defi_label,
         logs,
         decoded_logs: decodedLogs,
         source: 'indexed',
@@ -116,7 +134,12 @@ export default async function transactionsRoutes(app: FastifyInstance) {
       const archiveTx = await queryArchiveTransactionByHash(hash);
       if (archiveTx) {
         const archiveLogs = await queryArchiveEventsByTxHash(hash);
-        const data = { transaction: archiveTx, logs: archiveLogs, decoded_logs: null, source: 'archive' as const };
+        const archiveLabel = identifyTransaction(
+          (archiveTx as Record<string, unknown>).data as string | null,
+          (archiveTx as Record<string, unknown>).to_address as string | null,
+          (archiveTx as Record<string, unknown>).value as string || '0',
+        ) || undefined;
+        const data = { transaction: archiveTx, defi_label: archiveLabel, logs: archiveLogs, decoded_logs: null, source: 'archive' as const };
         await cacheSet(cacheKey, data, 300); // longer TTL for archived data
         return { ok: true, data };
       }
@@ -132,21 +155,25 @@ export default async function transactionsRoutes(app: FastifyInstance) {
     }
 
     const rpcReceipt = await rpcCallSafe<Record<string, string>>('eth_getTransactionReceipt', [hash]);
+    const rpcInputData = rpcTx.input || null;
+    const rpcValue = rpcTx.value ? BigInt(rpcTx.value).toString() : '0';
+    const rpcDefiLabel = identifyTransaction(rpcInputData, rpcTx.to, rpcValue) || undefined;
     const data = {
       transaction: {
         hash: rpcTx.hash,
         block_height: rpcTx.blockNumber ? parseInt(rpcTx.blockNumber, 16).toString() : null,
         from_address: rpcTx.from,
         to_address: rpcTx.to,
-        value: rpcTx.value ? BigInt(rpcTx.value).toString() : '0',
+        value: rpcValue,
         status: rpcReceipt?.status === '0x1' ? '1' : '0',
         gas_limit: rpcTx.gas ? parseInt(rpcTx.gas, 16).toString() : null,
         gas_price: rpcTx.gasPrice ? parseInt(rpcTx.gasPrice, 16).toString() : null,
         gas_used: rpcReceipt?.gasUsed ? parseInt(rpcReceipt.gasUsed, 16).toString() : null,
         nonce: rpcTx.nonce ? parseInt(rpcTx.nonce, 16).toString() : null,
-        data: rpcTx.input || null,
+        data: rpcInputData,
         type: rpcTx.type || null,
       },
+      defi_label: rpcDefiLabel,
       logs: [],
       source: 'rpc',
     };
@@ -176,4 +203,147 @@ export default async function transactionsRoutes(app: FastifyInstance) {
     }
     return { ok: true, data: { tx_hash: hash, items, total: items.length } };
   });
+
+  // GET /txs/:hash/flow — fund flow graph for Sankey visualization
+  app.get('/:hash/flow', async (request, reply) => {
+    const { hash } = request.params as { hash: string };
+    const cacheKey = `tx-flow:${hash}`;
+
+    // Check cache
+    const hit = await cacheGet<{ nodes: FlowNode[]; links: FlowLink[] }>(cacheKey);
+    if (hit) return { ok: true, data: hit };
+
+    // Fetch the main transaction
+    const tx = await getTransactionByHash(hash);
+    if (!tx) {
+      reply.status(404);
+      return { ok: false, error: 'Transaction not found' };
+    }
+
+    const links: FlowLink[] = [];
+    const nodeSet = new Set<string>();
+
+    // Main transaction link
+    if (tx.from_address && tx.to_address && tx.value && tx.value !== '0') {
+      const from = tx.from_address.toLowerCase();
+      const to = tx.to_address.toLowerCase();
+      links.push({ source: from, target: to, value: tx.value, type: 'native' });
+      nodeSet.add(from);
+      nodeSet.add(to);
+    } else if (tx.from_address && tx.to_address) {
+      // Include even zero-value main tx so we always have at least a from->to
+      const from = tx.from_address.toLowerCase();
+      const to = tx.to_address.toLowerCase();
+      links.push({ source: from, target: to, value: tx.value || '0', type: 'native' });
+      nodeSet.add(from);
+      nodeSet.add(to);
+    }
+
+    // Internal transactions
+    let internalTxs = await getInternalTxsByTxHash(hash);
+    if (internalTxs.length === 0) {
+      try {
+        internalTxs = await queryArchiveInternalTxsByTxHash(hash);
+      } catch { /* archive may not exist */ }
+    }
+
+    for (const itx of internalTxs) {
+      if (!itx.from_address || !itx.to_address) continue;
+      const from = (itx.from_address as string).toLowerCase();
+      const to = (itx.to_address as string).toLowerCase();
+      const value = (itx.value as string) || '0';
+      links.push({ source: from, target: to, value, type: 'internal' });
+      nodeSet.add(from);
+      nodeSet.add(to);
+    }
+
+    // Token transfers from events (Transfer events)
+    const logs = await getReceiptLogsByTxHash(hash);
+    const pool = getReadPool();
+
+    for (const log of logs as Array<Record<string, unknown>>) {
+      const topic0 = log.topic0 as string | null;
+      if (!topic0 || topic0.toLowerCase() !== TRANSFER_TOPIC) continue;
+
+      const topic1 = log.topic1 as string | null;
+      const topic2 = log.topic2 as string | null;
+      if (!topic1 || !topic2) continue;
+
+      // Decode addresses from topics (padded to 32 bytes)
+      const from = '0x' + topic1.slice(-40).toLowerCase();
+      const to = '0x' + topic2.slice(-40).toLowerCase();
+      const tokenAddr = (log.contract_address as string).toLowerCase();
+
+      // Try to get token name
+      let tokenName: string | undefined;
+      try {
+        const tokenResult = await pool.query(
+          `SELECT name, symbol FROM tokens WHERE address = $1 LIMIT 1`,
+          [tokenAddr]
+        );
+        if (tokenResult.rows.length > 0) {
+          const row = tokenResult.rows[0] as { name: string | null; symbol: string | null };
+          tokenName = row.symbol || row.name || undefined;
+        }
+      } catch { /* ignore */ }
+
+      // Decode value from log data
+      const data = log.data as string | null;
+      let value = '0';
+      if (data && data !== '0x' && data.length >= 66) {
+        try {
+          value = BigInt(data.slice(0, 66)).toString();
+        } catch {
+          value = '0';
+        }
+      }
+
+      links.push({ source: from, target: to, value, token: tokenName, type: 'erc20' });
+      nodeSet.add(from);
+      nodeSet.add(to);
+    }
+
+    // Cap links at 20 for readability
+    const cappedLinks = links.slice(0, 20);
+
+    // Rebuild node set from capped links
+    const finalNodeSet = new Set<string>();
+    for (const link of cappedLinks) {
+      finalNodeSet.add(link.source);
+      finalNodeSet.add(link.target);
+    }
+
+    // Try to resolve labels for nodes
+    const nodes: FlowNode[] = [];
+    for (const addr of finalNodeSet) {
+      let label: string | undefined;
+      try {
+        const labelResult = await pool.query(
+          `SELECT label FROM address_labels WHERE address = $1 LIMIT 1`,
+          [addr]
+        );
+        if (labelResult.rows.length > 0) {
+          label = (labelResult.rows[0] as { label: string }).label;
+        }
+      } catch { /* ignore */ }
+      nodes.push({ address: addr, ...(label ? { label } : {}) });
+    }
+
+    const data = { nodes, links: cappedLinks };
+    await cacheSet(cacheKey, data, 120);
+    return { ok: true, data };
+  });
+}
+
+interface FlowNode {
+  address: string;
+  label?: string;
+}
+
+interface FlowLink {
+  source: string;
+  target: string;
+  value: string;
+  token?: string;
+  type: 'native' | 'erc20' | 'internal';
 }
