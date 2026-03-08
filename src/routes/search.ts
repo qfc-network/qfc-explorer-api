@@ -4,7 +4,7 @@ import {
   getAddressOverview, searchTokensByName, searchTokensFts,
   searchBlockHeightPrefix, searchBlockHashPrefix,
   searchTransactionHashPrefix, searchAddressPrefix,
-  searchContractsByName, searchAddressLabels, getAddressLabel,
+  searchContractsByName, searchAddressLabels, getAddressLabel, getAddressLabels,
 } from '../db/queries.js';
 
 type SearchResult = {
@@ -60,6 +60,22 @@ export default async function searchRoutes(app: FastifyInstance) {
       ok: true,
       data: { query: q, total: results.length, results },
     };
+  });
+
+  // POST /search/labels — resolve addresses to labels (batch)
+  app.post('/labels', async (request, reply) => {
+    const body = request.body as { addresses?: string[] };
+    if (!Array.isArray(body?.addresses) || body.addresses.length === 0) {
+      reply.status(400);
+      return { ok: false, error: 'Expected { addresses: string[] }' };
+    }
+    const addrs = body.addresses.slice(0, 200); // cap at 200
+    const labels = await getAddressLabels(addrs);
+    const map: Record<string, { label: string; category: string | null }> = {};
+    for (const row of labels) {
+      map[row.address] = { label: row.label, category: row.category };
+    }
+    return { ok: true, data: map };
   });
 
   // GET /search/suggest — autocomplete suggestions
