@@ -596,6 +596,28 @@ export async function upsertAddressLabel(
   );
 }
 
+// --- Token Approvals ---
+
+export async function getTokenApprovalsByOwner(ownerAddress: string) {
+  const pool = getReadPool();
+  // Approval(address indexed owner, address indexed spender, uint256 value)
+  // topic0 = 0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c20019
+  // topic1 = owner (padded), topic2 = spender (padded)
+  const ownerPadded = '0x' + ownerAddress.replace('0x', '').toLowerCase().padStart(64, '0');
+  const result = await pool.query(
+    `SELECT e.contract_address AS token_address, e.topic2 AS spender_topic,
+            e.data, e.block_height, e.tx_hash,
+            t.name AS token_name, t.symbol AS token_symbol, t.decimals AS token_decimals
+     FROM events e
+     LEFT JOIN tokens t ON t.address = e.contract_address
+     WHERE e.topic0 = '0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c20019'
+       AND e.topic1 = $1
+     ORDER BY e.block_height DESC, e.log_index DESC`,
+    [ownerPadded]
+  );
+  return result.rows;
+}
+
 // --- Full-text Search ---
 
 export async function searchTokensFts(query: string, limit: number) {
