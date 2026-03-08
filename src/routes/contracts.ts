@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { getPool, getReadPool } from '../db/pool.js';
 import { rpcCall, rpcCallSafe } from '../lib/rpc.js';
-import { clamp, parseNumber } from '../lib/pagination.js';
+import { clamp, parseNumber, parseSort, parseOrder } from '../lib/pagination.js';
 import { cached, cacheGet, cacheSet } from '../lib/cache.js';
 import { decodeFunction, decodeEvent, getContractAbi, type AbiItem } from '../lib/abi-decoder.js';
 import { compileVyper, stripVyperMetadata } from '../lib/vyper-compiler.js';
@@ -281,23 +281,94 @@ export default async function contractsRoutes(app: FastifyInstance) {
     };
   });
 
-  // GET /contract/verified — top verified contracts
-  app.get('/verified', async () => {
-    const data = await cached('contracts:verified', 60, async () => {
-    const pool = getReadPool();
-    const result = await pool.query(`
-      SELECT c.address, c.creator_tx_hash, c.created_at_block, c.compiler_version, c.verified_at,
-             t.name AS token_name, t.symbol AS token_symbol,
-             (SELECT COUNT(*) FROM transactions
-              WHERE to_address = c.address)::int AS interaction_count
-      FROM contracts c
-      LEFT JOIN tokens t ON t.address = c.address
-      WHERE c.is_verified = true
-      ORDER BY interaction_count DESC
-      LIMIT 50
-    `);
-    const total = await pool.query('SELECT COUNT(*) AS c FROM contracts WHERE is_verified = true');
-    return { items: result.rows, total: Number(total.rows[0].c) };
+  // GET /contract/compilers — unique compiler versions used in verified contracts
+  app.get('/compilers', async () => {
+    const data = await cached('contracts:compilers', 300, async () => {
+      const pool = getReadPool();
+      const result = await pool.query(
+        `SELECT DISTINCT compiler_version FROM contracts
+         WHERE is_verified = true AND compiler_version IS NOT NULL
+         ORDER BY compiler_version DESC`
+      );
+      return result.rows.map((r: { compiler_version: string }) => r.compiler_version);
+    });
+    return { ok: true, data };
+  });
+
+  // GET /contract/verified — verified contracts with filtering, search, sort, pagination
+  app.get('/verified', async (request) => {
+    const q = request.query as Record<string, string>;
+    const page = Math.max(1, parseNumber(q.page, 1));
+    const limit = clamp(parseNumber(q.limit, 25), 1, 100);
+    const offset = (page - 1) * limit;
+    const sort = parseSort(q.sort, ['verified_at', 'created_at', 'name'], 'verified_at');
+    const order = parseOrder(q.order);
+    const compiler = q.compiler || null;
+    const search = q.search?.trim() || null;
+    const hasAbi = q.has_abi === 'true' ? true : q.has_abi === 'false' ? false : null;
+
+    // Build cache key from params
+    const cacheKey = `contracts:verified:${page}:${limit}:${sort}:${order}:${compiler ?? ''}:${search ?? ''}:${hasAbi ?? ''}`;
+
+    const data = await cached(cacheKey, 30, async () => {
+      const pool = getReadPool();
+
+      const conditions: string[] = ['c.is_verified = true'];
+      const params: (string | number)[] = [];
+      let paramIndex = 1;
+
+      if (compiler) {
+        conditions.push(`c.compiler_version = $${paramIndex}`);
+        params.push(compiler);
+        paramIndex++;
+      }
+
+      if (search) {
+        conditions.push(`(t.name ILIKE $${paramIndex} OR c.address ILIKE $${paramIndex})`);
+        params.push(`%${search}%`);
+        paramIndex++;
+      }
+
+      if (hasAbi === true) {
+        conditions.push('c.abi IS NOT NULL');
+      } else if (hasAbi === false) {
+        conditions.push('c.abi IS NULL');
+      }
+
+      const whereClause = conditions.join(' AND ');
+
+      // Determine ORDER BY column
+      let orderCol: string;
+      if (sort === 'name') {
+        orderCol = `t.name ${order} NULLS LAST`;
+      } else if (sort === 'created_at') {
+        orderCol = `c.created_at_block ${order} NULLS LAST`;
+      } else {
+        orderCol = `c.verified_at ${order} NULLS LAST`;
+      }
+
+      const [items, total] = await Promise.all([
+        pool.query(
+          `SELECT c.address, c.creator_tx_hash, c.created_at_block, c.compiler_version, c.verified_at,
+                  t.name AS token_name, t.symbol AS token_symbol,
+                  (SELECT COUNT(*) FROM transactions
+                   WHERE to_address = c.address)::int AS interaction_count
+           FROM contracts c
+           LEFT JOIN tokens t ON t.address = c.address
+           WHERE ${whereClause}
+           ORDER BY ${orderCol}
+           LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+          [...params, limit, offset]
+        ),
+        pool.query(
+          `SELECT COUNT(*) AS c FROM contracts c
+           LEFT JOIN tokens t ON t.address = c.address
+           WHERE ${whereClause}`,
+          params
+        ),
+      ]);
+
+      return { items: items.rows, total: Number(total.rows[0].c), page, limit };
     });
     return { ok: true, data };
   });
