@@ -4,6 +4,7 @@ import { rpcCall, rpcCallSafe } from '../lib/rpc.js';
 import { clamp, parseNumber } from '../lib/pagination.js';
 import { cached, cacheGet, cacheSet } from '../lib/cache.js';
 import { decodeFunction, decodeEvent, getContractAbi, type AbiItem } from '../lib/abi-decoder.js';
+import { compileVyper, stripVyperMetadata } from '../lib/vyper-compiler.js';
 
 // EIP-1967 / EIP-1822 storage slots
 const EIP1967_IMPL_SLOT = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc';
@@ -661,6 +662,298 @@ export default async function contractsRoutes(app: FastifyInstance) {
       reply.status(500);
       return { ok: false, error: error instanceof Error ? error.message : 'Verification failed' };
     }
+  });
+
+  // POST /contract/verify-vyper — Vyper source code verification
+  app.post('/verify-vyper', async (request, reply) => {
+    const body = request.body as {
+      address: string;
+      source_code: string;
+      compiler_version: string;
+      evm_version?: string;
+      constructor_args?: string;
+      contract_name?: string;
+    };
+
+    if (!body.address || !body.source_code || !body.compiler_version) {
+      reply.status(400);
+      return { ok: false, error: 'Missing required fields: address, source_code, compiler_version' };
+    }
+
+    if (!/^0x[a-fA-F0-9]{40}$/.test(body.address)) {
+      reply.status(400);
+      return { ok: false, error: 'Invalid address format' };
+    }
+
+    // Fetch deployed bytecode
+    const deployedCode = await rpcCallSafe<string>('eth_getCode', [body.address, 'latest']);
+    if (!deployedCode || deployedCode === '0x') {
+      reply.status(400);
+      return { ok: false, error: 'No contract code at this address' };
+    }
+
+    try {
+      const evmVersion = body.evm_version || 'paris';
+      const result = await compileVyper(body.source_code, body.compiler_version, evmVersion);
+
+      if ('error' in result) {
+        reply.status(400);
+        return { ok: false, error: result.error, details: result.details };
+      }
+
+      // Strip metadata from both bytecodes for comparison
+      const deployedStripped = stripVyperMetadata(deployedCode);
+      const compiledStripped = stripVyperMetadata(result.deployedBytecode);
+
+      if (deployedStripped !== compiledStripped) {
+        reply.status(400);
+        return { ok: false, error: 'Bytecode mismatch — verification failed' };
+      }
+
+      // Match found — store in DB with "vyper:" prefix on compiler version
+      const pool = getPool();
+      const compilerVersionPrefixed = `vyper:${body.compiler_version}`;
+      const contractName = body.contract_name || 'VyperContract';
+
+      await pool.query(
+        `UPDATE contracts SET
+           source_code = $2, abi = $3, compiler_version = $4,
+           evm_version = $5, optimization_runs = NULL,
+           is_verified = true, verified_at = NOW()
+         WHERE address = $1`,
+        [body.address, body.source_code, JSON.stringify(result.abi),
+         compilerVersionPrefixed, evmVersion]
+      );
+
+      return {
+        ok: true,
+        data: {
+          address: body.address,
+          verified: true,
+          contractName,
+          compiler: compilerVersionPrefixed,
+          evmVersion,
+        },
+      };
+    } catch (error) {
+      reply.status(500);
+      return { ok: false, error: error instanceof Error ? error.message : 'Verification failed' };
+    }
+  });
+
+  // GET /contract/diff — compare source code of two verified contracts
+  app.get('/diff', async (request, reply) => {
+    const q = request.query as Record<string, string>;
+    const addrA = q.a;
+    const addrB = q.b;
+
+    if (!addrA || !addrB) {
+      reply.status(400);
+      return { ok: false, error: 'Missing query params: a and b (contract addresses)' };
+    }
+
+    const addrRegex = /^0x[a-fA-F0-9]{40}$/;
+    if (!addrRegex.test(addrA) || !addrRegex.test(addrB)) {
+      reply.status(400);
+      return { ok: false, error: 'Invalid address format' };
+    }
+
+    if (addrA.toLowerCase() === addrB.toLowerCase()) {
+      reply.status(400);
+      return { ok: false, error: 'Both addresses are the same' };
+    }
+
+    const pool = getReadPool();
+    const [rowA, rowB] = await Promise.all([
+      pool.query(
+        `SELECT address, source_code, abi, compiler_version, is_verified
+         FROM contracts WHERE address = $1 LIMIT 1`,
+        [addrA]
+      ),
+      pool.query(
+        `SELECT address, source_code, abi, compiler_version, is_verified
+         FROM contracts WHERE address = $1 LIMIT 1`,
+        [addrB]
+      ),
+    ]);
+
+    const contractA = rowA.rows[0];
+    const contractB = rowB.rows[0];
+
+    if (!contractA || !contractA.is_verified || !contractA.source_code) {
+      reply.status(400);
+      return { ok: false, error: `Contract A (${addrA}) is not found or not verified` };
+    }
+    if (!contractB || !contractB.is_verified || !contractB.source_code) {
+      reply.status(400);
+      return { ok: false, error: `Contract B (${addrB}) is not found or not verified` };
+    }
+
+    // --- Line-by-line diff using LCS ---
+    const linesA = (contractA.source_code as string).split('\n');
+    const linesB = (contractB.source_code as string).split('\n');
+
+    const m = linesA.length;
+    const n = linesB.length;
+
+    // Build LCS direction table
+    // 0 = diagonal (match), 1 = up (remove from A), 2 = left (add from B)
+    const dirTable: Uint8Array[] = new Array(m + 1);
+    for (let ii = 0; ii <= m; ii++) dirTable[ii] = new Uint8Array(n + 1);
+
+    {
+      let prev = new Uint16Array(n + 1);
+      let curr = new Uint16Array(n + 1);
+      for (let ii = 1; ii <= m; ii++) {
+        [prev, curr] = [curr, prev];
+        curr.fill(0);
+        for (let jj = 1; jj <= n; jj++) {
+          if (linesA[ii - 1] === linesB[jj - 1]) {
+            curr[jj] = prev[jj - 1] + 1;
+            dirTable[ii][jj] = 0;
+          } else if (prev[jj] >= curr[jj - 1]) {
+            curr[jj] = prev[jj];
+            dirTable[ii][jj] = 1;
+          } else {
+            curr[jj] = curr[jj - 1];
+            dirTable[ii][jj] = 2;
+          }
+        }
+      }
+    }
+
+    // Backtrack to get diff operations
+    type DiffLine = { type: 'same' | 'added' | 'removed'; content: string };
+    const ops: DiffLine[] = [];
+    {
+      let ii = m, jj = n;
+      while (ii > 0 || jj > 0) {
+        if (ii > 0 && jj > 0 && dirTable[ii][jj] === 0) {
+          ops.push({ type: 'same', content: linesA[ii - 1] });
+          ii--; jj--;
+        } else if (ii > 0 && (jj === 0 || dirTable[ii][jj] === 1)) {
+          ops.push({ type: 'removed', content: linesA[ii - 1] });
+          ii--;
+        } else {
+          ops.push({ type: 'added', content: linesB[jj - 1] });
+          jj--;
+        }
+      }
+    }
+    ops.reverse();
+
+    // Group into hunks with context of 3 lines around changes
+    const CONTEXT = 3;
+    type HunkLine = { type: 'same' | 'added' | 'removed'; content: string };
+    type Hunk = { a_start: number; b_start: number; lines: HunkLine[] };
+    const hunks: Hunk[] = [];
+
+    const changeIndices: number[] = [];
+    for (let idx = 0; idx < ops.length; idx++) {
+      if (ops[idx].type !== 'same') changeIndices.push(idx);
+    }
+
+    if (changeIndices.length > 0) {
+      let hunkStart = Math.max(0, changeIndices[0] - CONTEXT);
+      let hunkEnd = Math.min(ops.length - 1, changeIndices[0] + CONTEXT);
+
+      const ranges: Array<[number, number]> = [];
+      for (let ci = 1; ci < changeIndices.length; ci++) {
+        const newStart = Math.max(0, changeIndices[ci] - CONTEXT);
+        const newEnd = Math.min(ops.length - 1, changeIndices[ci] + CONTEXT);
+        if (newStart <= hunkEnd + 1) {
+          hunkEnd = newEnd;
+        } else {
+          ranges.push([hunkStart, hunkEnd]);
+          hunkStart = newStart;
+          hunkEnd = newEnd;
+        }
+      }
+      ranges.push([hunkStart, hunkEnd]);
+
+      for (const [start, end] of ranges) {
+        let aStart = 1, bStart = 1;
+        for (let idx = 0; idx < start; idx++) {
+          if (ops[idx].type === 'same' || ops[idx].type === 'removed') aStart++;
+          if (ops[idx].type === 'same' || ops[idx].type === 'added') bStart++;
+        }
+
+        const hunkLines: HunkLine[] = [];
+        for (let idx = start; idx <= end; idx++) {
+          hunkLines.push({ type: ops[idx].type, content: ops[idx].content });
+        }
+        hunks.push({ a_start: aStart, b_start: bStart, lines: hunkLines });
+      }
+    }
+
+    // Stats
+    let additions = 0, deletions = 0, unchanged = 0;
+    for (const op of ops) {
+      if (op.type === 'added') additions++;
+      else if (op.type === 'removed') deletions++;
+      else unchanged++;
+    }
+
+    // --- ABI diff ---
+    type AbiFn = { name?: string; type: string; inputs?: Array<{ type: string }> };
+    const parseAbi = (raw: unknown): AbiFn[] => {
+      let abi: unknown[];
+      if (typeof raw === 'string') {
+        try { abi = JSON.parse(raw); } catch { return []; }
+      } else if (Array.isArray(raw)) {
+        abi = raw;
+      } else {
+        return [];
+      }
+      return abi.filter((item): item is AbiFn =>
+        typeof item === 'object' && item !== null && 'type' in item
+      );
+    };
+
+    const formatSig = (item: AbiFn): string => {
+      if (item.type === 'constructor') return 'constructor';
+      if (item.type === 'fallback') return 'fallback()';
+      if (item.type === 'receive') return 'receive()';
+      const inputs = (item.inputs || []).map((inp) => inp.type).join(',');
+      return `${item.name || item.type}(${inputs})`;
+    };
+
+    const abiA = parseAbi(contractA.abi);
+    const abiB = parseAbi(contractB.abi);
+
+    const sigsA = new Set(abiA.filter(a => a.type === 'function' || a.type === 'event').map(formatSig));
+    const sigsB = new Set(abiB.filter(a => a.type === 'function' || a.type === 'event').map(formatSig));
+
+    const abiAdded: string[] = [];
+    const abiRemoved: string[] = [];
+    for (const sig of sigsB) {
+      if (!sigsA.has(sig)) abiAdded.push(sig);
+    }
+    for (const sig of sigsA) {
+      if (!sigsB.has(sig)) abiRemoved.push(sig);
+    }
+
+    const data = {
+      contract_a: {
+        address: contractA.address as string,
+        name: null as string | null,
+        compiler: contractA.compiler_version as string,
+      },
+      contract_b: {
+        address: contractB.address as string,
+        name: null as string | null,
+        compiler: contractB.compiler_version as string,
+      },
+      hunks,
+      stats: { additions, deletions, unchanged },
+      abi_diff: {
+        added: abiAdded,
+        removed: abiRemoved,
+        modified: [] as string[],
+      },
+    };
+
+    return { ok: true, data };
   });
 
   // POST /contract/decode — decode calldata using verified ABI
