@@ -31,30 +31,30 @@ type NormalizedTx = {
   gasPrice: string;
   nonce: number;
   gas: string | null;
+  input: string | null;
 };
 
 /**
  * Flatten the nested txpool_content structure into a flat array of transactions.
  */
-function flattenTxPoolContent(content: TxPoolContent): NormalizedTx[] {
+function flattenTxPoolSection(section: Record<string, Record<string, RawTx>> | undefined): NormalizedTx[] {
   const txs: NormalizedTx[] = [];
+  if (!section) return txs;
 
-  for (const section of [content.pending, content.queued]) {
-    if (!section) continue;
-    for (const address of Object.keys(section)) {
-      const nonces = section[address];
-      for (const nonce of Object.keys(nonces)) {
-        const tx = nonces[nonce];
-        txs.push({
-          hash: tx.hash,
-          from: tx.from,
-          to: tx.to ?? null,
-          value: tx.value ?? '0x0',
-          gasPrice: tx.gasPrice ?? '0x0',
-          nonce: parseInt(tx.nonce, 16) || parseInt(nonce, 10) || 0,
-          gas: tx.gas ?? null,
-        });
-      }
+  for (const address of Object.keys(section)) {
+    const nonces = section[address];
+    for (const nonce of Object.keys(nonces)) {
+      const tx = nonces[nonce];
+      txs.push({
+        hash: tx.hash,
+        from: tx.from,
+        to: tx.to ?? null,
+        value: tx.value ?? '0x0',
+        gasPrice: tx.gasPrice ?? '0x0',
+        nonce: parseInt(tx.nonce, 16) || parseInt(nonce, 10) || 0,
+        gas: tx.gas ?? null,
+        input: tx.input ? tx.input.slice(0, 22) : null, // 0x + 8 hex chars = 10 bytes (method ID)
+      });
     }
   }
 
@@ -73,6 +73,7 @@ function normalizeRawTxs(raw: RawTx[]): NormalizedTx[] {
     gasPrice: tx.gasPrice ?? '0x0',
     nonce: typeof tx.nonce === 'string' ? (parseInt(tx.nonce, 16) || 0) : Number(tx.nonce) || 0,
     gas: tx.gas ?? null,
+    input: tx.input ? tx.input.slice(0, 22) : null,
   }));
 }
 
@@ -101,53 +102,69 @@ function sortTxs(txs: NormalizedTx[], sort: string, order: 'asc' | 'desc'): Norm
   return sorted;
 }
 
+/** Compute gas price stats (in Gwei) from a list of transactions. */
+function gasPriceStats(txs: NormalizedTx[]): { min: number; max: number; avg: number } {
+  if (txs.length === 0) return { min: 0, max: 0, avg: 0 };
+  const prices = txs.map((tx) => hexToNumber(tx.gasPrice));
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+  const avg = Math.round(prices.reduce((a, b) => a + b, 0) / prices.length);
+  return { min, max, avg };
+}
+
 /**
- * Fetch pending transactions from the node using txpool_content,
+ * Fetch pending and queued transactions from the node using txpool_content,
  * with fallbacks to qfc_getPendingTransactions and eth_pendingTransactions.
  */
-async function fetchPendingTxs(): Promise<{ pending: NormalizedTx[]; queued: number }> {
+async function fetchAllTxPoolTxs(): Promise<{ pending: NormalizedTx[]; queued: NormalizedTx[] }> {
   // Strategy 1: txpool_content (Geth-style)
   const content = await rpcCallSafe<TxPoolContent>('txpool_content', []);
   if (content && content.pending) {
-    const pending = flattenTxPoolContent({ pending: content.pending, queued: {} });
-    const queued = flattenTxPoolContent({ pending: {}, queued: content.queued ?? {} });
-    return { pending, queued: queued.length };
+    const pending = flattenTxPoolSection(content.pending);
+    const queued = flattenTxPoolSection(content.queued);
+    return { pending, queued };
   }
 
   // Strategy 2: qfc_getPendingTransactions (QFC custom)
   const qfcPending = await rpcCallSafe<RawTx[]>('qfc_getPendingTransactions', []);
   if (qfcPending && Array.isArray(qfcPending)) {
-    return { pending: normalizeRawTxs(qfcPending), queued: 0 };
+    return { pending: normalizeRawTxs(qfcPending), queued: [] };
   }
 
   // Strategy 3: eth_pendingTransactions (some clients)
   const ethPending = await rpcCallSafe<RawTx[]>('eth_pendingTransactions', []);
   if (ethPending && Array.isArray(ethPending)) {
-    return { pending: normalizeRawTxs(ethPending), queued: 0 };
+    return { pending: normalizeRawTxs(ethPending), queued: [] };
   }
 
   // No txpool support — return empty
-  return { pending: [], queued: 0 };
+  return { pending: [], queued: [] };
 }
 
 export default async function txpoolRoutes(app: FastifyInstance) {
-  // GET /txpool — list pending transactions
+  // GET /txpool — list pending and queued transactions with summary stats
   app.get('/', async (request) => {
     const query = request.query as Record<string, string | undefined>;
     const sort = parseSort(query.sort, ['gas_price', 'nonce', 'value'], 'nonce');
     const order = parseOrder(query.order);
-    const limit = clamp(parseNumber(query.limit, 50), 1, 200);
+    const limit = clamp(parseNumber(query.limit, 100), 1, 500);
 
-    const { pending, queued } = await fetchPendingTxs();
-    const sorted = sortTxs(pending, sort, order);
-    const limited = sorted.slice(0, limit);
+    const { pending, queued } = await fetchAllTxPoolTxs();
+
+    const pendingSorted = sortTxs(pending, sort, order).slice(0, limit);
+    const queuedSorted = sortTxs(queued, sort, order).slice(0, limit);
+
+    const allTxs = [...pending, ...queued];
+    const stats = gasPriceStats(allTxs);
 
     return {
       ok: true,
       data: {
-        pending: limited,
-        count: pending.length,
-        queued,
+        pending: pendingSorted,
+        queued: queuedSorted,
+        totalPending: pending.length,
+        totalQueued: queued.length,
+        gasPriceStats: stats,
         sort,
         order,
         limit,
@@ -170,12 +187,12 @@ export default async function txpoolRoutes(app: FastifyInstance) {
     }
 
     // Fallback: derive from content
-    const { pending, queued } = await fetchPendingTxs();
+    const { pending, queued } = await fetchAllTxPoolTxs();
     return {
       ok: true,
       data: {
         pending: pending.length,
-        queued,
+        queued: queued.length,
       },
     };
   });
