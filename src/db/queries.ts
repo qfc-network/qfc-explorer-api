@@ -48,6 +48,61 @@ export async function getBlocksPage(
   return result.rows;
 }
 
+export async function getBlocksByCursor(
+  limit: number, cursorHeight: string, order: 'asc' | 'desc' = 'desc', producer?: string | null
+): Promise<BlockRow[]> {
+  const pool = getReadPool();
+  const direction = order === 'asc' ? 'ASC' : 'DESC';
+  const op = order === 'asc' ? '>' : '<';
+  const clauses: string[] = [`height ${op} $2`];
+  const params: Array<string | number> = [limit, cursorHeight];
+  if (producer) {
+    clauses.push('producer = $3');
+    params.push(producer);
+  }
+  const where = `WHERE ${clauses.join(' AND ')}`;
+  const result = await pool.query(
+    `SELECT hash, height, parent_hash, producer, timestamp_ms, tx_count
+     FROM blocks ${where} ORDER BY height ${direction} LIMIT $1`,
+    params
+  );
+  return result.rows;
+}
+
+export async function getTransactionsByCursor(
+  limit: number, cursorBlockHeight: string, cursorTxIndex: string,
+  order: 'asc' | 'desc' = 'desc',
+  filters?: { address?: string; status?: string }
+): Promise<Array<TransactionRow & { tx_index: number }>> {
+  const pool = getReadPool();
+  const direction = order === 'asc' ? 'ASC' : 'DESC';
+  const op = order === 'asc' ? '>' : '<';
+  const clauses: string[] = [`(block_height, tx_index) ${op} ($2, $3)`];
+  const params: Array<string | number> = [limit, cursorBlockHeight, cursorTxIndex];
+  let paramIndex = 4;
+
+  if (filters?.address) {
+    clauses.push(`(from_address = $${paramIndex} OR to_address = $${paramIndex})`);
+    params.push(filters.address);
+    paramIndex += 1;
+  }
+  if (filters?.status) {
+    clauses.push(`status = $${paramIndex}`);
+    params.push(filters.status);
+    paramIndex += 1;
+  }
+
+  const where = `WHERE ${clauses.join(' AND ')}`;
+  const result = await pool.query(
+    `SELECT hash, block_height, tx_index, from_address, to_address, value, status
+     FROM transactions ${where}
+     ORDER BY block_height ${direction}, tx_index ${direction}
+     LIMIT $1`,
+    params
+  );
+  return result.rows;
+}
+
 export async function getBlockByHeight(height: string) {
   const pool = getReadPool();
   const result = await pool.query(
@@ -117,7 +172,7 @@ export async function getTransactionsPage(
 
   const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
   const result = await pool.query(
-    `SELECT hash, block_height, from_address, to_address, value, status
+    `SELECT hash, block_height, tx_index, from_address, to_address, value, status
      FROM transactions ${where}
      ORDER BY block_height ${direction}, tx_index ${direction}
      LIMIT $1 OFFSET $2`,

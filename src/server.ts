@@ -1,3 +1,4 @@
+import { gzipSync } from 'node:zlib';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { registerMetrics } from './middleware/metrics.js';
@@ -21,6 +22,8 @@ import wsRoutes from './routes/ws.js';
 import adminRoutes from './routes/admin.js';
 import healthRoutes from './routes/health.js';
 import toolsRoutes from './routes/tools.js';
+import etherscanRoutes from './routes/etherscan.js';
+import txpoolRoutes from './routes/txpool.js';
 
 const PORT = Number(process.env.PORT || 3001);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -39,6 +42,27 @@ const app = Fastify({
 await app.register(cors, {
   origin: process.env.CORS_ORIGIN || '*',
   methods: ['GET', 'POST'],
+});
+
+// Response compression (gzip) for payloads > 1 KB
+const COMPRESSION_THRESHOLD = 1024;
+app.addHook('onSend', async (request, reply, payload) => {
+  if (payload == null) return payload;
+
+  const accept = request.headers['accept-encoding'];
+  if (!accept || !accept.includes('gzip')) return payload;
+
+  // Only compress string/Buffer payloads (skip streams)
+  const raw = typeof payload === 'string' ? payload : payload instanceof Buffer ? payload : null;
+  if (!raw) return payload;
+
+  const size = typeof raw === 'string' ? Buffer.byteLength(raw) : raw.length;
+  if (size < COMPRESSION_THRESHOLD) return payload;
+
+  const compressed = gzipSync(raw);
+  void reply.header('Content-Encoding', 'gzip');
+  void reply.header('Content-Length', compressed.length);
+  return compressed;
 });
 
 // Prometheus metrics
@@ -61,6 +85,10 @@ await app.register(wsRoutes);
 await app.register(adminRoutes, { prefix: '/admin' });
 await app.register(healthRoutes);
 await app.register(toolsRoutes, { prefix: '/tools' });
+await app.register(etherscanRoutes, { prefix: '/etherscan' });
+// Mount etherscan-compat routes at root too — hardhat-verify posts to /api directly
+await app.register(etherscanRoutes, { prefix: '/' });
+await app.register(txpoolRoutes, { prefix: '/txpool' });
 
 // Graceful shutdown
 const shutdown = async () => {

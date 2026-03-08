@@ -1,22 +1,44 @@
 import { FastifyInstance } from 'fastify';
-import { getBlocksPage, getBlockByHeight, getTransactionsByBlockHeight, getInternalTxsByBlock } from '../db/queries.js';
-import { clamp, parseNumber, parseOrder } from '../lib/pagination.js';
+import { getBlocksPage, getBlocksByCursor, getBlockByHeight, getTransactionsByBlockHeight, getInternalTxsByBlock } from '../db/queries.js';
+import { clamp, parseNumber, parseOrder, parseCursor, encodeCursor } from '../lib/pagination.js';
 import { cached } from '../lib/cache.js';
 
 export default async function blocksRoutes(app: FastifyInstance) {
   // GET /blocks
   app.get('/', async (request) => {
     const q = request.query as Record<string, string>;
-    const page = parseNumber(q.page, 1);
     const limit = clamp(parseNumber(q.limit, 25), 1, 100);
     const order = parseOrder(q.order);
     const producer = q.producer || null;
+
+    // Cursor-based pagination (takes priority if provided)
+    if (q.cursor) {
+      const cur = parseCursor(q.cursor);
+      if (!cur || cur.field !== 'height') {
+        return { ok: false, error: 'Invalid cursor' };
+      }
+      const cacheKey = `blocks:cur:${q.cursor}:${limit}:${order}:${producer || ''}`;
+      const data = await cached(cacheKey, 5, async () => {
+        const blocks = await getBlocksByCursor(limit, cur.value, order, producer);
+        const next_cursor = blocks.length === limit
+          ? encodeCursor('height', blocks[blocks.length - 1].height)
+          : null;
+        return { limit, order, producer, items: blocks, next_cursor };
+      });
+      return { ok: true, data };
+    }
+
+    // Offset-based pagination (default)
+    const page = parseNumber(q.page, 1);
     const offset = (page - 1) * limit;
 
     const cacheKey = `blocks:${page}:${limit}:${order}:${producer || ''}`;
     const data = await cached(cacheKey, 5, async () => {
       const blocks = await getBlocksPage(limit, offset, order, producer);
-      return { page, limit, order, producer, items: blocks };
+      const next_cursor = blocks.length === limit
+        ? encodeCursor('height', blocks[blocks.length - 1].height)
+        : null;
+      return { page, limit, order, producer, items: blocks, next_cursor };
     });
     return { ok: true, data };
   });

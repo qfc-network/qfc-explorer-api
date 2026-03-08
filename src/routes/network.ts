@@ -6,7 +6,7 @@ export default async function networkRoutes(app: FastifyInstance) {
   app.get('/', async () => {
     const [epoch, nodeInfo, validators] = await Promise.all([
       rpcCallSafe<Record<string, unknown>>('qfc_getEpoch', []),
-      rpcCallSafe<Record<string, unknown>>('qfc_getNodeInfo', []),
+      rpcCallSafe<Record<string, unknown>>('qfc_nodeInfo', []),
       rpcCallSafe<Array<Record<string, unknown>>>('qfc_getValidators', []),
     ]);
 
