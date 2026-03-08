@@ -54,6 +54,7 @@ export default async function addressesRoutes(app: FastifyInstance) {
   });
 
   // GET /address/:address/export — CSV export for address transactions or token transfers
+  // Supports optional date range: ?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
   app.get('/:address/export', async (request, reply) => {
     const { address } = request.params as { address: string };
     const q = request.query as Record<string, string>;
@@ -63,29 +64,57 @@ export default async function addressesRoutes(app: FastifyInstance) {
     const direction = order === 'asc' ? 'ASC' : 'DESC';
     const pool = getReadPool();
 
+    // Date range filter: resolve to block height range via blocks table
+    let startBlock: string | null = null;
+    let endBlock: string | null = null;
+    if (q.start_date) {
+      const ts = new Date(q.start_date).getTime();
+      if (!isNaN(ts)) {
+        const r = await pool.query('SELECT MIN(height) AS h FROM blocks WHERE timestamp_ms >= $1', [ts]);
+        startBlock = r.rows[0]?.h ?? null;
+      }
+    }
+    if (q.end_date) {
+      const ts = new Date(q.end_date).getTime() + 86400000; // end of day
+      if (!isNaN(ts)) {
+        const r = await pool.query('SELECT MAX(height) AS h FROM blocks WHERE timestamp_ms < $1', [ts]);
+        endBlock = r.rows[0]?.h ?? null;
+      }
+    }
+
     let csv = '';
 
     if (type === 'token_transfers') {
+      const params: (string | number)[] = [address, limit];
+      let dateFilter = '';
+      if (startBlock) { params.push(startBlock); dateFilter += ` AND tt.block_height >= $${params.length}`; }
+      if (endBlock) { params.push(endBlock); dateFilter += ` AND tt.block_height <= $${params.length}`; }
+
       const result = await pool.query(
         `SELECT tt.tx_hash, tt.block_height, tt.token_address, tt.from_address, tt.to_address, tt.value,
                 t.symbol AS token_symbol, t.decimals AS token_decimals
          FROM token_transfers tt LEFT JOIN tokens t ON t.address = tt.token_address
-         WHERE tt.from_address = $1 OR tt.to_address = $1
+         WHERE (tt.from_address = $1 OR tt.to_address = $1)${dateFilter}
          ORDER BY tt.block_height ${direction}, tt.log_index ${direction}
          LIMIT $2`,
-        [address, limit]
+        params
       );
       const headers = ['tx_hash', 'block_height', 'token_address', 'from_address', 'to_address', 'value', 'token_symbol', 'token_decimals'];
       csv = [headers.join(','), ...result.rows.map((r: Record<string, unknown>) =>
         headers.map((h) => String(r[h] ?? '')).join(',')
       )].join('\n');
     } else {
+      const params: (string | number)[] = [address, limit];
+      let dateFilter = '';
+      if (startBlock) { params.push(startBlock); dateFilter += ` AND block_height >= $${params.length}`; }
+      if (endBlock) { params.push(endBlock); dateFilter += ` AND block_height <= $${params.length}`; }
+
       const result = await pool.query(
         `SELECT hash, block_height, from_address, to_address, value, status, gas_used, gas_price
-         FROM transactions WHERE from_address = $1 OR to_address = $1
+         FROM transactions WHERE (from_address = $1 OR to_address = $1)${dateFilter}
          ORDER BY block_height ${direction}, tx_index ${direction}
          LIMIT $2`,
-        [address, limit]
+        params
       );
       const headers = ['hash', 'block_height', 'from_address', 'to_address', 'value', 'status', 'gas_used', 'gas_price'];
       csv = [headers.join(','), ...result.rows.map((r: Record<string, unknown>) =>
