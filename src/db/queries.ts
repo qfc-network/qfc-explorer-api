@@ -20,6 +20,74 @@ export type TransactionRow = {
   data?: string | null;
 };
 
+export type TxFilters = {
+  address?: string;
+  status?: string;
+  min_value?: string;
+  max_value?: string;
+  method?: string;
+  from_date?: string;
+  to_date?: string;
+  tx_type?: string;
+};
+
+function appendTxFilterClauses(
+  clauses: string[],
+  params: Array<string | number>,
+  startIndex: number,
+  filters?: TxFilters,
+): number {
+  let paramIndex = startIndex;
+
+  if (filters?.address) {
+    clauses.push(`(from_address = $${paramIndex} OR to_address = $${paramIndex})`);
+    params.push(filters.address);
+    paramIndex += 1;
+  }
+  if (filters?.status && filters.status !== 'all') {
+    const statusVal = filters.status === 'success' ? '1' : filters.status === 'failed' ? '0' : filters.status;
+    clauses.push(`status = $${paramIndex}`);
+    params.push(statusVal);
+    paramIndex += 1;
+  }
+  if (filters?.min_value) {
+    // Cast value to numeric for comparison (handles both hex and decimal stored values)
+    clauses.push(`CAST(value AS NUMERIC) >= $${paramIndex}`);
+    params.push(filters.min_value);
+    paramIndex += 1;
+  }
+  if (filters?.max_value) {
+    clauses.push(`CAST(value AS NUMERIC) <= $${paramIndex}`);
+    params.push(filters.max_value);
+    paramIndex += 1;
+  }
+  if (filters?.method) {
+    // method is first 4 bytes selector e.g. "0xa9059cbb" — match first 10 chars of input_data
+    clauses.push(`input_data LIKE $${paramIndex}`);
+    params.push(`${filters.method}%`);
+    paramIndex += 1;
+  }
+  if (filters?.from_date) {
+    clauses.push(`created_at >= $${paramIndex}`);
+    params.push(filters.from_date);
+    paramIndex += 1;
+  }
+  if (filters?.to_date) {
+    clauses.push(`created_at <= $${paramIndex}`);
+    params.push(filters.to_date);
+    paramIndex += 1;
+  }
+  if (filters?.tx_type && filters.tx_type !== 'all') {
+    if (filters.tx_type === 'native') {
+      clauses.push(`(input_data IS NULL OR input_data = '0x' OR input_data = '')`);
+    } else if (filters.tx_type === 'contract') {
+      clauses.push(`length(input_data) > 2`);
+    }
+  }
+
+  return paramIndex;
+}
+
 // --- Blocks ---
 
 export async function getLatestBlocks(limit = 10): Promise<BlockRow[]> {
@@ -72,25 +140,15 @@ export async function getBlocksByCursor(
 export async function getTransactionsByCursor(
   limit: number, cursorBlockHeight: string, cursorTxIndex: string,
   order: 'asc' | 'desc' = 'desc',
-  filters?: { address?: string; status?: string }
+  filters?: TxFilters
 ): Promise<Array<TransactionRow & { tx_index: number }>> {
   const pool = getReadPool();
   const direction = order === 'asc' ? 'ASC' : 'DESC';
   const op = order === 'asc' ? '>' : '<';
   const clauses: string[] = [`(block_height, tx_index) ${op} ($2, $3)`];
   const params: Array<string | number> = [limit, cursorBlockHeight, cursorTxIndex];
-  let paramIndex = 4;
 
-  if (filters?.address) {
-    clauses.push(`(from_address = $${paramIndex} OR to_address = $${paramIndex})`);
-    params.push(filters.address);
-    paramIndex += 1;
-  }
-  if (filters?.status) {
-    clauses.push(`status = $${paramIndex}`);
-    params.push(filters.status);
-    paramIndex += 1;
-  }
+  appendTxFilterClauses(clauses, params, 4, filters);
 
   const where = `WHERE ${clauses.join(' AND ')}`;
   const result = await pool.query(
@@ -151,24 +209,14 @@ export async function getLatestTransactions(limit = 10): Promise<TransactionRow[
 
 export async function getTransactionsPage(
   limit: number, offset: number, order: 'asc' | 'desc' = 'desc',
-  filters?: { address?: string; status?: string }
+  filters?: TxFilters
 ): Promise<TransactionRow[]> {
   const pool = getReadPool();
   const direction = order === 'asc' ? 'ASC' : 'DESC';
   const clauses: string[] = [];
   const params: Array<string | number> = [limit, offset];
-  let paramIndex = 3;
 
-  if (filters?.address) {
-    clauses.push(`(from_address = $${paramIndex} OR to_address = $${paramIndex})`);
-    params.push(filters.address);
-    paramIndex += 1;
-  }
-  if (filters?.status) {
-    clauses.push(`status = $${paramIndex}`);
-    params.push(filters.status);
-    paramIndex += 1;
-  }
+  appendTxFilterClauses(clauses, params, 3, filters);
 
   const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
   const result = await pool.query(
@@ -656,7 +704,7 @@ export async function upsertAddressLabel(
 export async function getTokenApprovalsByOwner(ownerAddress: string) {
   const pool = getReadPool();
   // Approval(address indexed owner, address indexed spender, uint256 value)
-  // topic0 = 0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c20019
+  // topic0 = 0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c93090
   // topic1 = owner (padded), topic2 = spender (padded)
   const ownerPadded = '0x' + ownerAddress.replace('0x', '').toLowerCase().padStart(64, '0');
   const result = await pool.query(
@@ -665,7 +713,7 @@ export async function getTokenApprovalsByOwner(ownerAddress: string) {
             t.name AS token_name, t.symbol AS token_symbol, t.decimals AS token_decimals
      FROM events e
      LEFT JOIN tokens t ON t.address = e.contract_address
-     WHERE e.topic0 = '0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c20019'
+     WHERE e.topic0 = '0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c93090'
        AND e.topic1 = $1
      ORDER BY e.block_height DESC, e.log_index DESC`,
     [ownerPadded]

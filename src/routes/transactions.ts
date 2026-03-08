@@ -16,9 +16,20 @@ export default async function transactionsRoutes(app: FastifyInstance) {
     const q = request.query as Record<string, string>;
     const limit = clamp(parseNumber(q.limit, 25), 1, 100);
     const order = parseOrder(q.order);
-    const filters: { address?: string; status?: string } = {};
+    const filters: {
+      address?: string; status?: string;
+      min_value?: string; max_value?: string;
+      method?: string; from_date?: string; to_date?: string;
+      tx_type?: string;
+    } = {};
     if (q.address) filters.address = q.address;
     if (q.status) filters.status = q.status;
+    if (q.min_value) filters.min_value = q.min_value;
+    if (q.max_value) filters.max_value = q.max_value;
+    if (q.method) filters.method = q.method;
+    if (q.from_date) filters.from_date = q.from_date;
+    if (q.to_date) filters.to_date = q.to_date;
+    if (q.tx_type) filters.tx_type = q.tx_type;
 
     // Cursor-based pagination (takes priority if provided)
     if (q.cursor) {

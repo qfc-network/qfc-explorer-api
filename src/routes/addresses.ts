@@ -9,6 +9,7 @@ import { getReadPool } from '../db/pool.js';
 import { rpcCallSafe } from '../lib/rpc.js';
 import { clamp, parseNumber, parseOrder } from '../lib/pagination.js';
 import { cached } from '../lib/cache.js';
+import { getTokenPrice, getTokenPrices } from '../lib/price-service.js';
 
 export default async function addressesRoutes(app: FastifyInstance) {
   // GET /address/:address
@@ -43,11 +44,77 @@ export default async function addressesRoutes(app: FastifyInstance) {
       transactions = await getAddressTransactions(address, limit, offset, order);
     }
 
+    // --- Portfolio USD valuation ---
+    // Get native QFC price + all held token prices in parallel
+    const tokenAddresses = (tokenHoldings as Array<{ token_address: string }>).map(
+      (h) => h.token_address
+    );
+    const [qfcPrice, tokenPriceMap] = await Promise.all([
+      getTokenPrice('qfc'),
+      getTokenPrices(tokenAddresses),
+    ]);
+    const qfcPriceUsd = qfcPrice?.priceUsd ?? null;
+
+    // Compute native QFC balance USD
+    let balanceUsd: number | null = null;
+    if (qfcPriceUsd != null && overview) {
+      try {
+        const wei = BigInt((overview as { balance: string }).balance);
+        const qfcAmount = Number(wei) / 1e18;
+        const usd = qfcAmount * qfcPriceUsd;
+        if (Number.isFinite(usd) && usd > 0) {
+          balanceUsd = Math.round(usd * 100) / 100;
+        }
+      } catch {
+        // skip if balance parse fails
+      }
+    }
+
+    // Enrich token holdings with price_usd and value_usd
+    let tokenValueSum = 0;
+    const enrichedTokenHoldings = (tokenHoldings as Array<{
+      token_address: string;
+      token_decimals: number | null;
+      balance: string;
+      [key: string]: unknown;
+    }>).map((h) => {
+      const price = tokenPriceMap.get(h.token_address.toLowerCase());
+      const priceUsd = price?.priceUsd ?? null;
+      let valueUsd: number | null = null;
+
+      if (priceUsd != null) {
+        try {
+          const decimals = h.token_decimals ?? 18;
+          const raw = BigInt(h.balance);
+          const humanAmount = Number(raw) / Math.pow(10, decimals);
+          const usd = humanAmount * priceUsd;
+          if (Number.isFinite(usd) && usd > 0) {
+            valueUsd = Math.round(usd * 100) / 100;
+            tokenValueSum += usd;
+          }
+        } catch {
+          // skip
+        }
+      }
+
+      return { ...h, price_usd: priceUsd, value_usd: valueUsd };
+    });
+
+    // Sort enriched holdings by value_usd descending (tokens with value first)
+    enrichedTokenHoldings.sort((a, b) => (b.value_usd ?? -1) - (a.value_usd ?? -1));
+
+    const totalPortfolioUsd =
+      (balanceUsd ?? 0) + tokenValueSum > 0
+        ? Math.round(((balanceUsd ?? 0) + tokenValueSum) * 100) / 100
+        : null;
+
     return {
       ok: true,
       data: {
         address, label, overview, stats, analysis, contract,
-        tokenHoldings, nftHoldings,
+        tokenHoldings: enrichedTokenHoldings, nftHoldings,
+        balance_usd: balanceUsd,
+        total_portfolio_usd: totalPortfolioUsd,
         tab, page, limit, order, transactions, tokenTransfers, internalTxs,
       },
     };
