@@ -25,6 +25,7 @@ import healthRoutes from './routes/health.js';
 import toolsRoutes from './routes/tools.js';
 import etherscanRoutes from './routes/etherscan.js';
 import txpoolRoutes from './routes/txpool.js';
+import authRoutes from './routes/auth.js';
 
 const PORT = Number(process.env.PORT || 3001);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -39,10 +40,16 @@ const app = Fastify({
   },
 });
 
+// Cookie support (must be registered before routes)
+await app.register(import('@fastify/cookie'), {
+  secret: process.env.COOKIE_SECRET || 'qfc-explorer-cookie-secret',
+});
+
 // CORS — allow explorer frontend
 await app.register(cors, {
   origin: process.env.CORS_ORIGIN || '*',
-  methods: ['GET', 'POST'],
+  methods: ['GET', 'POST', 'PATCH'],
+  credentials: true,
 });
 
 // Response compression (gzip) for payloads > 1 KB
@@ -90,6 +97,7 @@ await app.register(etherscanRoutes, { prefix: '/etherscan' });
 // Mount etherscan-compat routes at root too — hardhat-verify posts to /api directly
 await app.register(etherscanRoutes, { prefix: '/' });
 await app.register(txpoolRoutes, { prefix: '/txpool' });
+await app.register(authRoutes, { prefix: '/auth' });
 
 // Graceful shutdown
 const shutdown = async () => {
