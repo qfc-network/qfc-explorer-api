@@ -5,7 +5,8 @@
  * No external dependencies — pure hex parsing with ABI fragment matching.
  */
 
-import { keccak256 } from 'js-sha3';
+import pkg from 'js-sha3';
+const { keccak256 } = pkg;
 
 // --- Types ---
 
