@@ -4,6 +4,7 @@ import {
   getContractByAddress, getTokenHoldingsByAddress, getNftHoldingsByAddress,
   getAddressTransactions, getTokenTransfersByAddress,
   getInternalTxsByAddress, getAddressLabel, getTokenApprovalsByOwner,
+  getEventsByContractAddress, getEventCountsByContract,
 } from '../db/queries.js';
 import { getReadPool } from '../db/pool.js';
 import { rpcCallSafe } from '../lib/rpc.js';
@@ -36,11 +37,19 @@ export default async function addressesRoutes(app: FastifyInstance) {
     let transactions = null;
     let tokenTransfers = null;
     let internalTxs = null;
+    let events = null;
+    let eventCounts = null;
 
     if (tab === 'token_transfers') {
       tokenTransfers = await getTokenTransfersByAddress(address, limit, offset, order);
     } else if (tab === 'internal_txs') {
       internalTxs = await getInternalTxsByAddress(address, limit, offset, order);
+    } else if (tab === 'events') {
+      const eventFilter = q.event || null;
+      [events, eventCounts] = await Promise.all([
+        getEventsByContractAddress(address, limit, offset, order, eventFilter),
+        getEventCountsByContract(address),
+      ]);
     } else {
       transactions = await getAddressTransactions(address, limit, offset, order);
     }
@@ -116,7 +125,23 @@ export default async function addressesRoutes(app: FastifyInstance) {
         tokenHoldings: enrichedTokenHoldings, nftHoldings,
         balance_usd: balanceUsd,
         total_portfolio_usd: totalPortfolioUsd,
-        tab, page, limit, order, transactions, tokenTransfers, internalTxs,
+        tab, page, limit, order,
+        transactions: transactions ? (transactions as Array<Record<string, unknown>>).map((tx) => {
+          const inputData = tx.input_data as (string | Buffer | null | undefined);
+          let method_id: string | undefined;
+          if (inputData) {
+            if (Buffer.isBuffer(inputData) && inputData.length >= 4) {
+              method_id = '0x' + inputData.subarray(0, 4).toString('hex').toLowerCase();
+            } else if (typeof inputData === 'string') {
+              const clean = inputData.startsWith('0x') ? inputData.slice(2) : inputData;
+              if (clean.length >= 8) method_id = '0x' + clean.slice(0, 8).toLowerCase();
+            }
+          }
+          const { input_data: _input, ...rest } = tx;
+          return { ...rest, ...(method_id ? { method_id } : {}) };
+        }) : transactions,
+        tokenTransfers, internalTxs,
+        events, event_counts: eventCounts,
       },
     };
   });

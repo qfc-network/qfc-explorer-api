@@ -14,6 +14,22 @@ import { identifyTransaction } from '../lib/defi-protocols.js';
 // Transfer event topic: keccak256("Transfer(address,address,uint256)")
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 
+/** Extract the 4-byte method selector from input_data (hex string or Buffer). Returns "0xabcd1234" or null. */
+function extractMethodId(inputData: string | Buffer | null | undefined): string | null {
+  if (!inputData) return null;
+  let hex: string;
+  if (Buffer.isBuffer(inputData)) {
+    if (inputData.length < 4) return null;
+    hex = inputData.subarray(0, 4).toString('hex');
+  } else {
+    const str = typeof inputData === 'string' ? inputData : '';
+    const clean = str.startsWith('0x') ? str.slice(2) : str;
+    if (clean.length < 8) return null;
+    hex = clean.slice(0, 8);
+  }
+  return `0x${hex.toLowerCase()}`;
+}
+
 export default async function transactionsRoutes(app: FastifyInstance) {
   // GET /txs — paginated list
   app.get('/', async (request) => {
@@ -44,8 +60,9 @@ export default async function transactionsRoutes(app: FastifyInstance) {
       const rawItems = await getTransactionsByCursor(limit, cur.block_height, cur.tx_index, order, filters);
       const items = rawItems.map((item) => {
         const defi_label = identifyTransaction(item.input_data, item.to_address, item.value) || undefined;
+        const method_id = extractMethodId(item.input_data) || undefined;
         const { input_data: _input, ...rest } = item as Record<string, unknown>;
-        return { ...rest, ...(defi_label ? { defi_label } : {}) };
+        return { ...rest, ...(defi_label ? { defi_label } : {}), ...(method_id ? { method_id } : {}) };
       });
       const next_cursor = items.length === limit
         ? encodeTxCursor(String((items[items.length - 1] as Record<string, unknown>).block_height), String((rawItems[rawItems.length - 1] as Record<string, unknown>).tx_index))
@@ -59,8 +76,9 @@ export default async function transactionsRoutes(app: FastifyInstance) {
     const rawItems = await getTransactionsPage(limit, offset, order, filters);
     const items = rawItems.map((item) => {
       const defi_label = identifyTransaction(item.input_data, item.to_address, item.value) || undefined;
+      const method_id = extractMethodId(item.input_data) || undefined;
       const { input_data: _input, ...rest } = item as Record<string, unknown>;
-      return { ...rest, ...(defi_label ? { defi_label } : {}) };
+      return { ...rest, ...(defi_label ? { defi_label } : {}), ...(method_id ? { method_id } : {}) };
     });
     // Generate a cursor from the last item if we have a full page
     const last = rawItems.length === limit ? rawItems[rawItems.length - 1] as Record<string, unknown> : null;
