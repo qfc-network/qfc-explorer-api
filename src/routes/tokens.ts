@@ -3,9 +3,12 @@ import {
   getTokensPage, getTokenByAddress, getTokenTransfers,
   getTokenHolders, getNftHoldersByToken, getRecentTokenTransfers,
 } from '../db/queries.js';
-import { clamp, parseNumber, parseOrder } from '../lib/pagination.js';
+import { clamp, parseNumber, parseOrder, parseSort } from '../lib/pagination.js';
 import { getTokenPrice, getTokenPrices, getTokenSparkline } from '../lib/price-service.js';
 import { getReadPool } from '../db/pool.js';
+
+const SORT_FIELDS = ['market_cap', 'holders', 'volume', 'price', 'name', 'transfers'] as const;
+const TOKEN_TYPES = ['erc20', 'erc721', 'erc1155', 'all'] as const;
 
 export default async function tokensRoutes(app: FastifyInstance) {
   // GET /tokens
@@ -14,23 +17,95 @@ export default async function tokensRoutes(app: FastifyInstance) {
     const page = parseNumber(q.page, 1);
     const limit = clamp(parseNumber(q.limit, 25), 1, 100);
     const order = parseOrder(q.order);
+    const sort = parseSort(q.sort, [...SORT_FIELDS], 'market_cap');
+    const type = TOKEN_TYPES.includes(q.type as any) ? q.type : 'all';
     const offset = (page - 1) * limit;
-    const items = await getTokensPage(limit, offset, order);
 
-    // Enrich with price data via LEFT JOIN lookup
-    const addresses = items.map((t: any) => t.address);
-    const priceMap = await getTokenPrices(addresses);
-    const enriched = items.map((t: any) => {
-      const p = priceMap.get(t.address);
-      return {
-        ...t,
-        price_usd: p?.priceUsd ?? null,
-        market_cap_usd: p?.marketCapUsd ?? null,
-        change_24h: p?.change24h ?? null,
-      };
-    });
+    const pool = getReadPool();
+    const direction = order === 'asc' ? 'ASC' : 'DESC';
 
-    return { ok: true, data: { page, limit, order, items: enriched } };
+    // Build WHERE clause for type filter
+    const conditions: string[] = [];
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    if (type !== 'all') {
+      conditions.push(`t.token_type = $${paramIndex}`);
+      params.push(type);
+      paramIndex++;
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    // Build ORDER BY clause based on sort
+    let orderByClause: string;
+    switch (sort) {
+      case 'holders':
+        orderByClause = `holder_count ${direction} NULLS LAST`;
+        break;
+      case 'volume':
+        orderByClause = `tp.volume_24h ${direction} NULLS LAST`;
+        break;
+      case 'price':
+        orderByClause = `tp.price_usd ${direction} NULLS LAST`;
+        break;
+      case 'name':
+        orderByClause = `t.name ${direction} NULLS LAST`;
+        break;
+      case 'transfers':
+        orderByClause = `transfer_count ${direction} NULLS LAST`;
+        break;
+      case 'market_cap':
+      default:
+        orderByClause = `tp.market_cap_usd ${direction} NULLS LAST`;
+        break;
+    }
+
+    params.push(limit, offset);
+    const limitParam = `$${paramIndex}`;
+    const offsetParam = `$${paramIndex + 1}`;
+
+    const sql = `
+      SELECT
+        t.address, t.name, t.symbol, t.decimals, t.total_supply, t.last_seen_block, t.token_type,
+        tp.price_usd, tp.market_cap_usd, tp.change_24h, tp.volume_24h,
+        (SELECT COUNT(*)::int FROM token_balances tb WHERE tb.token_address = t.address AND tb.balance != '0') AS holder_count,
+        (SELECT COUNT(*)::int FROM token_transfers tt WHERE tt.token_address = t.address) AS transfer_count
+      FROM tokens t
+      LEFT JOIN token_prices tp ON tp.token_address = t.address
+      ${whereClause}
+      ORDER BY ${orderByClause}
+      LIMIT ${limitParam} OFFSET ${offsetParam}
+    `;
+
+    const result = await pool.query(sql, params);
+    const items = result.rows.map((row: any) => ({
+      address: row.address,
+      name: row.name,
+      symbol: row.symbol,
+      decimals: row.decimals,
+      total_supply: row.total_supply,
+      last_seen_block: row.last_seen_block,
+      token_type: row.token_type,
+      price_usd: row.price_usd != null ? Number(row.price_usd) : null,
+      market_cap_usd: row.market_cap_usd != null ? Number(row.market_cap_usd) : null,
+      change_24h: row.change_24h != null ? Number(row.change_24h) : null,
+      volume_24h: row.volume_24h != null ? Number(row.volume_24h) : null,
+      holder_count: row.holder_count ?? 0,
+      transfer_count: row.transfer_count ?? 0,
+    }));
+
+    // Get total count for pagination
+    const countSql = `
+      SELECT COUNT(*)::int AS total
+      FROM tokens t
+      LEFT JOIN token_prices tp ON tp.token_address = t.address
+      ${whereClause}
+    `;
+    const countResult = await pool.query(countSql, params.slice(0, paramIndex - 1));
+    const total = countResult.rows[0]?.total ?? 0;
+
+    return { ok: true, data: { page, limit, order, sort, type, total, items } };
   });
 
   // GET /tokens/transfers — recent token transfers (all tokens)

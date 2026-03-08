@@ -26,6 +26,7 @@ import toolsRoutes from './routes/tools.js';
 import etherscanRoutes from './routes/etherscan.js';
 import txpoolRoutes from './routes/txpool.js';
 import authRoutes from './routes/auth.js';
+import watchlistRoutes from './routes/watchlist.js';
 
 const PORT = Number(process.env.PORT || 3001);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -48,7 +49,7 @@ await app.register(import('@fastify/cookie'), {
 // CORS — allow explorer frontend
 await app.register(cors, {
   origin: process.env.CORS_ORIGIN || '*',
-  methods: ['GET', 'POST', 'PATCH'],
+  methods: ['GET', 'POST', 'PATCH', 'DELETE'],
   credentials: true,
 });
 
@@ -98,6 +99,7 @@ await app.register(etherscanRoutes, { prefix: '/etherscan' });
 await app.register(etherscanRoutes, { prefix: '/' });
 await app.register(txpoolRoutes, { prefix: '/txpool' });
 await app.register(authRoutes, { prefix: '/auth' });
+await app.register(watchlistRoutes, { prefix: '/watchlist' });
 
 // Graceful shutdown
 const shutdown = async () => {
