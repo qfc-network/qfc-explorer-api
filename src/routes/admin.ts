@@ -5,6 +5,7 @@ import { upsertAddressLabel, listAddressLabels, searchAddressLabels } from '../d
 import { archiveBelow, getArchiveStatus } from '../lib/archive.js';
 import { getWsStats } from './ws.js';
 import { getRedisConfig } from '../lib/cache.js';
+import { setManualPrice, listPrices, deletePrice } from '../lib/price-service.js';
 
 export default async function adminRoutes(app: FastifyInstance) {
   // GET /admin/db
@@ -158,6 +159,44 @@ export default async function adminRoutes(app: FastifyInstance) {
   // GET /admin/redis — Redis config and status
   app.get('/redis', async () => {
     return { ok: true, data: getRedisConfig() };
+  });
+
+  // POST /admin/prices — set manual price for a token
+  app.post('/prices', async (request, reply) => {
+    const body = request.body as {
+      tokenAddress: string;
+      priceUsd: number;
+      marketCapUsd?: number;
+      change24h?: number;
+      volume24h?: number;
+    };
+    if (!body.tokenAddress || typeof body.priceUsd !== 'number') {
+      reply.status(400);
+      return { ok: false, error: 'Missing tokenAddress or priceUsd' };
+    }
+    if (!/^0x[a-fA-F0-9]{40}$/.test(body.tokenAddress)) {
+      reply.status(400);
+      return { ok: false, error: 'Invalid address format' };
+    }
+    await setManualPrice(body.tokenAddress, body.priceUsd, body.marketCapUsd, body.change24h, body.volume24h);
+    return { ok: true, data: { tokenAddress: body.tokenAddress.toLowerCase(), priceUsd: body.priceUsd } };
+  });
+
+  // GET /admin/prices — list all configured prices
+  app.get('/prices', async () => {
+    const prices = await listPrices();
+    return { ok: true, data: { prices } };
+  });
+
+  // DELETE /admin/prices/:address — remove price entry
+  app.delete('/prices/:address', async (request, reply) => {
+    const { address } = request.params as { address: string };
+    const deleted = await deletePrice(address);
+    if (!deleted) {
+      reply.status(404);
+      return { ok: false, error: 'Price entry not found' };
+    }
+    return { ok: true, data: { address: address.toLowerCase(), deleted: true } };
   });
 
   // GET /admin/rate-limit

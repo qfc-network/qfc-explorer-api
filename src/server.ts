@@ -5,6 +5,7 @@ import { registerMetrics } from './middleware/metrics.js';
 import { closePool } from './db/pool.js';
 import { closeRedis } from './lib/cache.js';
 import { startMetricsUpdater } from './middleware/metrics-updater.js';
+import { startPriceUpdater } from './lib/price-updater.js';
 
 import blocksRoutes from './routes/blocks.js';
 import transactionsRoutes from './routes/transactions.js';
@@ -105,6 +106,7 @@ process.on('SIGTERM', shutdown);
 try {
   await app.listen({ port: PORT, host: HOST });
   startMetricsUpdater();
+  startPriceUpdater();
   app.log.info(`QFC Explorer API listening on ${HOST}:${PORT}`);
 } catch (err) {
   app.log.error(err);
