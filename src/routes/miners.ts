@@ -19,6 +19,12 @@ type RpcRegisteredMiner = {
   vramMb: number;
   backend: string;
   registeredAt: string;
+  os: string;
+  arch: string;
+  cpuModel: string;
+  cpuCores: number;
+  totalMemoryMb: number;
+  version: string;
 };
 
 type RpcMinerEarning = {
@@ -101,11 +107,17 @@ export default async function minersRoutes(app: FastifyInstance) {
     }
 
     const data = await cached(`miners:${address}`, 15, async () => {
-      const [earnings, vesting, contribution] = await Promise.all([
+      const [earnings, vesting, contribution, allMiners] = await Promise.all([
         rpcCallSafe<RpcMinerEarning[]>('qfc_getMinerEarnings', [address, 'all']),
         rpcCallSafe<RpcMinerVesting>('qfc_getMinerVesting', [address]),
         rpcCallSafe<RpcContributionScore>('qfc_getContributionScore', [address]),
+        rpcCallSafe<RpcRegisteredMiner[]>('qfc_getRegisteredMiners', []),
       ]);
+
+      // Find this miner's hardware profile
+      const profile = allMiners?.find(
+        (m) => m.address.toLowerCase() === address.toLowerCase()
+      );
 
       return {
         address,
@@ -116,6 +128,19 @@ export default async function minersRoutes(app: FastifyInstance) {
         contributionScore: contribution?.score ?? '0',
         earnings: earnings ?? [],
         tranches: vesting?.tranches ?? [],
+        // Hardware profile
+        gpuModel: profile?.gpuModel ?? '',
+        benchmarkScore: profile?.benchmarkScore ?? 0,
+        tier: profile?.tier ?? 0,
+        vramMb: profile?.vramMb ?? 0,
+        backend: profile?.backend ?? '',
+        os: profile?.os ?? '',
+        arch: profile?.arch ?? '',
+        cpuModel: profile?.cpuModel ?? '',
+        cpuCores: profile?.cpuCores ?? 0,
+        totalMemoryMb: profile?.totalMemoryMb ?? 0,
+        version: profile?.version ?? '',
+        registeredAt: profile?.registeredAt ?? '',
       };
     });
 
