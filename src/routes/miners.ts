@@ -1,6 +1,7 @@
 /**
- * Miner API routes — earnings, vesting, contribution score.
+ * Miner API routes — list, earnings, vesting, contribution score.
  *
+ * GET /miners — list all registered miners (paginated)
  * GET /miners/:address — full miner detail (earnings + vesting + score)
  * GET /miners/:address/earnings — earnings history with period filter
  * GET /miners/:address/vesting — vesting schedule
@@ -9,6 +10,16 @@
 import { FastifyInstance } from 'fastify';
 import { rpcCall, rpcCallSafe } from '../lib/rpc.js';
 import { cached } from '../lib/cache.js';
+
+type RpcRegisteredMiner = {
+  address: string;
+  gpuModel: string;
+  benchmarkScore: number;
+  tier: number;
+  vramMb: number;
+  backend: string;
+  registeredAt: string;
+};
 
 type RpcMinerEarning = {
   blockHeight: string;
@@ -43,6 +54,44 @@ function isValidAddress(addr: string): boolean {
 }
 
 export default async function minersRoutes(app: FastifyInstance) {
+  // GET /miners — list all registered miners
+  app.get('/', async (request, reply) => {
+    const query = request.query as { page?: string; limit?: string };
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 25));
+
+    const data = await cached('miners:list', 30, async () => {
+      const miners = await rpcCallSafe<RpcRegisteredMiner[]>('qfc_getRegisteredMiners', []);
+      if (!miners) return { total: 0, items: [] as Array<RpcRegisteredMiner & { contributionScore: string }> };
+
+      // Enrich with contribution scores in parallel
+      const enriched = await Promise.all(
+        miners.map(async (m) => {
+          const score = await rpcCallSafe<{ score: string }>('qfc_getContributionScore', [m.address]);
+          return {
+            ...m,
+            contributionScore: score?.score ?? '0',
+          };
+        })
+      );
+
+      return { total: enriched.length, items: enriched };
+    });
+
+    const start = (page - 1) * limit;
+    const items = data.items.slice(start, start + limit);
+
+    return {
+      ok: true,
+      data: {
+        page,
+        limit,
+        total: data.total,
+        items,
+      },
+    };
+  });
+
   // GET /miners/:address — full miner detail
   app.get('/:address', async (request, reply) => {
     const { address } = request.params as { address: string };
