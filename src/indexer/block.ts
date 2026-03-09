@@ -39,7 +39,7 @@ async function upsertBlock(client: PoolClient, block: RpcBlock): Promise<void> {
     // blocks table is NOT partitioned — PK remains (hash)
     [
       block.hash, height.toString(10), block.parentHash, block.stateRoot,
-      block.transactionsRoot, block.receiptsRoot, block.miner,
+      block.transactionsRoot, block.receiptsRoot, block.miner?.toLowerCase() ?? null,
       parseHeight(block.timestamp).toString(10),
       parseHeight(block.gasLimit).toString(10),
       parseHeight(block.gasUsed).toString(10),
@@ -65,7 +65,7 @@ async function bulkUpsertTransactions(
     );
     params.push(
       tx.hash, blockHash, blockHeight.toString(10), i, 'unknown',
-      tx.from, tx.to ?? null, hexToBigIntString(tx.value) ?? '0',
+      tx.from?.toLowerCase() ?? null, tx.to?.toLowerCase() ?? null, hexToBigIntString(tx.value) ?? '0',
       parseHeight(tx.nonce).toString(10), parseHeight(tx.gas).toString(10),
       hexToBigIntString(tx.gasPrice) ?? '0', 'unknown', hexToBuffer(tx.input)
     );
@@ -200,8 +200,8 @@ export async function processBlock(rpc: RpcClient, height: bigint): Promise<Bloc
     await upsertBlock(dbClient, block);
     await bulkUpsertTransactions(dbClient, txs, block.hash, height);
     for (const tx of txs) {
-      if (tx.from) addressSet.add(tx.from);
-      if (tx.to) addressSet.add(tx.to);
+      if (tx.from) addressSet.add(tx.from.toLowerCase());
+      if (tx.to) addressSet.add(tx.to.toLowerCase());
     }
     await upsertAccounts(dbClient, Array.from(addressSet), height);
     await dbClient.query('COMMIT');

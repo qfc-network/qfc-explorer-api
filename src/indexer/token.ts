@@ -6,7 +6,7 @@ import type { BlockResult } from './block.js';
 import { decodeString, decodeUint256, decodeUint256Pair, decodeUint256Arrays, parseAddressFromTopic } from './utils.js';
 import { tokenTransfersProcessed } from './metrics.js';
 
-const ERC20_TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a7a5c6b6e0f';
+const ERC20_TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 const ERC1155_TRANSFER_SINGLE_TOPIC = '0xc3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62';
 const ERC1155_TRANSFER_BATCH_TOPIC = '0x4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8c0526c8f7fb';
 const ERC20_NAME = '0x06fdde03';

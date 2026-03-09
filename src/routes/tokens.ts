@@ -325,7 +325,7 @@ export default async function tokensRoutes(app: FastifyInstance) {
 
     // Get paginated NFT items
     const itemsRes = await pool.query(
-      `SELECT address, token_id, balance
+      `SELECT holder_address, token_id, balance
        FROM token_balances
        WHERE token_address = $1 AND balance != '0' AND token_id IS NOT NULL
        ORDER BY token_id::numeric ASC
@@ -335,14 +335,14 @@ export default async function tokensRoutes(app: FastifyInstance) {
 
     // Fetch metadata for each item (best effort, parallel with concurrency limit)
     const items = await Promise.all(
-      itemsRes.rows.map(async (row: { address: string; token_id: string; balance: string }) => {
+      itemsRes.rows.map(async (row: { holder_address: string; token_id: string; balance: string }) => {
         let metadata: NftMetadataResult | null = null;
         try {
           metadata = await getCachedNftMetadata(addr, row.token_id);
         } catch { /* non-critical */ }
         return {
           token_id: row.token_id,
-          owner: row.address,
+          owner: row.holder_address,
           balance: row.balance,
           image: metadata?.image ?? null,
           name: metadata?.name ?? null,
@@ -368,12 +368,12 @@ export default async function tokensRoutes(app: FastifyInstance) {
 
     // Get current owner from token_balances
     const ownerRes = await pool.query(
-      `SELECT address, balance FROM token_balances
+      `SELECT holder_address, balance FROM token_balances
        WHERE token_address = $1 AND token_id = $2 AND balance != '0'
        ORDER BY balance::numeric DESC LIMIT 1`,
       [addr, tokenId],
     );
-    const owner = ownerRes.rows[0]?.address ?? null;
+    const owner = ownerRes.rows[0]?.holder_address ?? null;
 
     // Get transfer history for this specific token ID
     const transfersRes = await pool.query(

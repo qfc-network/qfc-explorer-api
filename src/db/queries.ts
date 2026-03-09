@@ -768,7 +768,7 @@ export async function approveAddressLabel(address: string) {
 export async function getTokenApprovalsByOwner(ownerAddress: string) {
   const pool = getReadPool();
   // Approval(address indexed owner, address indexed spender, uint256 value)
-  // topic0 = 0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c93090
+  // topic0 = 0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925
   // topic1 = owner (padded), topic2 = spender (padded)
   const ownerPadded = '0x' + ownerAddress.replace('0x', '').toLowerCase().padStart(64, '0');
   const result = await pool.query(
@@ -777,7 +777,7 @@ export async function getTokenApprovalsByOwner(ownerAddress: string) {
             t.name AS token_name, t.symbol AS token_symbol, t.decimals AS token_decimals
      FROM events e
      LEFT JOIN tokens t ON t.address = e.contract_address
-     WHERE e.topic0 = '0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c93090'
+     WHERE e.topic0 = '0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925'
        AND e.topic1 = $1
      ORDER BY e.block_height DESC, e.log_index DESC`,
     [ownerPadded]
