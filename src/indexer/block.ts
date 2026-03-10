@@ -74,15 +74,15 @@ async function bulkUpsertTransactions(
   await client.query(
     `INSERT INTO transactions (
        hash, block_hash, block_height, tx_index, type,
-       from_address, to_address, value, nonce, gas_limit, gas_price, status, data
+       from_address, to_address, value, nonce, gas_limit, gas_price, status, input_data
      ) VALUES ${values.join(',')}
-     ON CONFLICT (hash, block_height) DO UPDATE SET
+     ON CONFLICT (hash) DO UPDATE SET
        block_hash = EXCLUDED.block_hash,
        tx_index = EXCLUDED.tx_index, from_address = EXCLUDED.from_address,
        to_address = EXCLUDED.to_address, value = EXCLUDED.value,
        nonce = EXCLUDED.nonce, gas_limit = EXCLUDED.gas_limit,
        gas_price = EXCLUDED.gas_price, status = EXCLUDED.status,
-       data = EXCLUDED.data`,
+       input_data = EXCLUDED.input_data`,
     params
   );
 }
