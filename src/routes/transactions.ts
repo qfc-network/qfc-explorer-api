@@ -115,8 +115,8 @@ export default async function transactionsRoutes(app: FastifyInstance) {
         const pool = getReadPool();
         const abi = await getContractAbi(pool, toAddr.toLowerCase());
         if (abi) {
-          if (tx.data && tx.data !== '0x') {
-            decodedInput = decodeFunction(tx.data, abi);
+          if (tx.input_data && tx.input_data !== '0x') {
+            decodedInput = decodeFunction(tx.input_data, abi);
           }
           decodedLogs = (logs as Array<Record<string, unknown>>)
             .map((log) => {
@@ -129,7 +129,7 @@ export default async function transactionsRoutes(app: FastifyInstance) {
       }
 
       // Identify DeFi action from input data selector
-      const defi_label = identifyTransaction(tx.data, tx.to_address, tx.value) || undefined;
+      const defi_label = identifyTransaction(tx.input_data, tx.to_address, tx.value) || undefined;
 
       const data = {
         transaction: {
@@ -153,7 +153,7 @@ export default async function transactionsRoutes(app: FastifyInstance) {
       if (archiveTx) {
         const archiveLogs = await queryArchiveEventsByTxHash(hash);
         const archiveLabel = identifyTransaction(
-          (archiveTx as Record<string, unknown>).data as string | null,
+          (archiveTx as Record<string, unknown>).input_data as string | null,
           (archiveTx as Record<string, unknown>).to_address as string | null,
           (archiveTx as Record<string, unknown>).value as string || '0',
         ) || undefined;

@@ -234,7 +234,7 @@ export async function getTransactionByHash(hash: string) {
   const pool = getReadPool();
   const result = await pool.query(
     `SELECT t.hash, t.block_height, t.from_address, t.to_address, t.value, t.status,
-            t.gas_limit, t.gas_price, t.nonce, t.data, t.type, b.timestamp_ms
+            t.gas_limit, t.gas_price, t.nonce, t.input_data, t.type, b.timestamp_ms
      FROM transactions t LEFT JOIN blocks b ON b.height = t.block_height
      WHERE t.hash = $1 LIMIT 1`,
     [hash]
@@ -243,7 +243,7 @@ export async function getTransactionByHash(hash: string) {
   if (!row) return null;
   return {
     ...row,
-    data: row.data ? `0x${row.data.toString('hex')}` : null,
+    input_data: row.input_data ? (typeof row.input_data === 'string' ? row.input_data : `0x${(row.input_data as Buffer).toString('hex')}`) : null,
     timestamp_ms: row.timestamp_ms?.toString() ?? null,
   };
 }
