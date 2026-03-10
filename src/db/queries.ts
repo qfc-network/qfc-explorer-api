@@ -234,7 +234,7 @@ export async function getTransactionByHash(hash: string) {
   const pool = getReadPool();
   const result = await pool.query(
     `SELECT t.hash, t.block_height, t.from_address, t.to_address, t.value, t.status,
-            t.gas_limit, t.gas_price, t.nonce, t.data, t.type, b.timestamp_ms
+            t.gas_limit, t.gas_price, t.nonce, t.input_data, t.type, b.timestamp_ms
      FROM transactions t LEFT JOIN blocks b ON b.height = t.block_height
      WHERE t.hash = $1 LIMIT 1`,
     [hash]
@@ -243,7 +243,7 @@ export async function getTransactionByHash(hash: string) {
   if (!row) return null;
   return {
     ...row,
-    data: row.data ? `0x${row.data.toString('hex')}` : null,
+    input_data: row.input_data ? (typeof row.input_data === 'string' ? row.input_data : `0x${(row.input_data as Buffer).toString('hex')}`) : null,
     timestamp_ms: row.timestamp_ms?.toString() ?? null,
   };
 }
@@ -276,8 +276,8 @@ export async function getAddressStats(address: string) {
   const pool = getReadPool();
   const result = await pool.query(
     `SELECT
-       (SELECT COUNT(*) FROM transactions WHERE from_address = $1) AS sent,
-       (SELECT COUNT(*) FROM transactions WHERE to_address = $1) AS received`,
+       (SELECT COUNT(*) FROM transactions WHERE LOWER(from_address) = LOWER($1)) AS sent,
+       (SELECT COUNT(*) FROM transactions WHERE LOWER(to_address) = LOWER($1)) AS received`,
     [address]
   );
   return result.rows[0] ?? null;
@@ -287,10 +287,10 @@ export async function getAddressAnalysis(address: string) {
   const pool = getReadPool();
   const result = await pool.query(
     `SELECT
-       (SELECT COUNT(*) FROM transactions WHERE from_address = $1) AS sent_count,
-       (SELECT COUNT(*) FROM transactions WHERE to_address = $1) AS received_count,
-       (SELECT COALESCE(SUM(value::numeric), 0) FROM transactions WHERE from_address = $1) AS sent_value,
-       (SELECT COALESCE(SUM(value::numeric), 0) FROM transactions WHERE to_address = $1) AS received_value`,
+       (SELECT COUNT(*) FROM transactions WHERE LOWER(from_address) = LOWER($1)) AS sent_count,
+       (SELECT COUNT(*) FROM transactions WHERE LOWER(to_address) = LOWER($1)) AS received_count,
+       (SELECT COALESCE(SUM(value::numeric), 0) FROM transactions WHERE LOWER(from_address) = LOWER($1)) AS sent_value,
+       (SELECT COALESCE(SUM(value::numeric), 0) FROM transactions WHERE LOWER(to_address) = LOWER($1)) AS received_value`,
     [address]
   );
   return result.rows[0] ?? null;
@@ -303,7 +303,7 @@ export async function getAddressTransactions(
   const direction = order === 'asc' ? 'ASC' : 'DESC';
   const result = await pool.query(
     `SELECT hash, block_height, from_address, to_address, value, status, input_data
-     FROM transactions WHERE from_address = $1 OR to_address = $1
+     FROM transactions WHERE LOWER(from_address) = LOWER($1) OR LOWER(to_address) = LOWER($1)
      ORDER BY block_height ${direction}, tx_index ${direction}
      LIMIT $2 OFFSET $3`,
     [address, limit, offset]
