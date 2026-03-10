@@ -39,6 +39,7 @@ import gasOracleRoutes from './routes/gas-oracle.js';
 import batchRoutes from './routes/batch.js';
 import richlistRoutes from './routes/richlist.js';
 import agentsRoutes from './routes/agents.js';
+import rpcRoutes from './routes/rpc.js';
 import { apiKeyAuth } from './middleware/apikey-auth.js';
 
 const PORT = Number(process.env.PORT || 3001);
@@ -125,6 +126,7 @@ await app.register(gasOracleRoutes, { prefix: '/gas-oracle' });
 await app.register(batchRoutes, { prefix: '/batch' });
 await app.register(richlistRoutes, { prefix: '/richlist' });
 await app.register(agentsRoutes, { prefix: '/agents' });
+await app.register(rpcRoutes, { prefix: '/rpc' });
 
 // Global API key authentication hook
 app.addHook('onRequest', apiKeyAuth);
