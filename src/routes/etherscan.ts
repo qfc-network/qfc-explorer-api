@@ -120,6 +120,69 @@ export default async function etherscanRoutes(app: FastifyInstance) {
       return err(`Unknown action: ${q.action}`);
     }
 
+
+    // --- module=transaction ---
+    if (module === 'transaction') {
+      if (action === 'gettxreceiptstatus' || action === 'getstatus') {
+        const txhash = q.txhash;
+        if (!txhash) return err('Missing txhash parameter');
+        const pool = getReadPool();
+        const row = await pool.query('SELECT status FROM transactions WHERE hash = $1 LIMIT 1', [txhash.toLowerCase()]);
+        if (!row.rows[0]) return err('Transaction not found');
+        const isOk = row.rows[0].status === 'success' || row.rows[0].status === '1' ? '1' : '0';
+        if (action === 'getstatus') return ok({ isError: isOk === '1' ? '0' : '1', errDescription: '' });
+        return ok({ status: isOk });
+      }
+      return err('Unknown action: ' + q.action);
+    }
+
+    // --- module=block ---
+    if (module === 'block') {
+      if (action === 'getblockreward') {
+        const blockno = q.blockno;
+        if (!blockno) return err('Missing blockno');
+        const pool = getReadPool();
+        const row = await pool.query('SELECT hash, height, producer, timestamp_ms, gas_used FROM blocks WHERE height = $1 LIMIT 1', [blockno]);
+        if (!row.rows[0]) return err('Block not found');
+        const b = row.rows[0];
+        return ok({ blockNumber: String(b.height), timeStamp: String(Math.floor(Number(b.timestamp_ms)/1000)), blockMiner: b.producer ?? '', blockReward: '0', uncles: [], uncleInclusionReward: '0' });
+      }
+      if (action === 'getblockcountdown') {
+        const blockno = Number(q.blockno);
+        const pool = getReadPool();
+        const latest = await pool.query('SELECT height FROM blocks ORDER BY height DESC LIMIT 1');
+        const currentBlock = Number(latest.rows[0]?.height ?? 0);
+        if (blockno <= currentBlock) return err('Block already passed');
+        const remaining = blockno - currentBlock;
+        return ok({ CurrentBlock: String(currentBlock), CountdownBlock: String(blockno), RemainingBlock: String(remaining), EstimateTimeInSec: String(remaining * 3) });
+      }
+      if (action === 'getblocknobytime') {
+        const ts = Number(q.timestamp) * 1000;
+        const closest = q.closest ?? 'before';
+        const pool = getReadPool();
+        const op = closest === 'after' ? '>=' : '<=';
+        const ord = closest === 'after' ? 'ASC' : 'DESC';
+        const row = await pool.query(`SELECT height FROM blocks WHERE timestamp_ms ${op} $1 ORDER BY height ${ord} LIMIT 1`, [ts]);
+        if (!row.rows[0]) return err('Block not found');
+        return ok(String(row.rows[0].height));
+      }
+      return err('Unknown action: ' + q.action);
+    }
+
+    // --- module=token ---
+    if (module === 'token') {
+      if (action === 'tokeninfo') {
+        const addr = q.contractaddress;
+        if (!addr) return err('Missing contractaddress');
+        const pool = getReadPool();
+        const row = await pool.query('SELECT address, name, symbol, decimals, total_supply FROM tokens WHERE address = LOWER($1) LIMIT 1', [addr]);
+        if (!row.rows[0]) return err('Token not found');
+        const t = row.rows[0];
+        return ok([{ contractAddress: t.address, tokenName: t.name, symbol: t.symbol, divisor: String(Math.pow(10, Number(t.decimals))), tokenType: 'ERC-20', totalSupply: t.total_supply ?? '0', blueCheckmark: 'false', description: '', website: '', email: '', blog: '', reddit: '', slack: '', facebook: '', twitter: '', bitcointalk: '', github: '', telegram: '', wechat: '', linkedin: '', discord: '', whitepaper: '', tokenPriceUSD: '0' }]);
+      }
+      return err('Unknown action: ' + q.action);
+    }
+
     return err(`Unknown module: ${q.module}`);
   });
 
