@@ -274,24 +274,26 @@ export async function getAddressOverview(address: string) {
 
 export async function getAddressStats(address: string) {
   const pool = getReadPool();
+  const addr = address.toLowerCase();
   const result = await pool.query(
     `SELECT
-       (SELECT COUNT(*) FROM transactions WHERE LOWER(from_address) = LOWER($1)) AS sent,
-       (SELECT COUNT(*) FROM transactions WHERE LOWER(to_address) = LOWER($1)) AS received`,
-    [address]
+       (SELECT COUNT(*) FROM transactions WHERE from_address = $1) AS sent,
+       (SELECT COUNT(*) FROM transactions WHERE to_address = $1) AS received`,
+    [addr]
   );
   return result.rows[0] ?? null;
 }
 
 export async function getAddressAnalysis(address: string) {
   const pool = getReadPool();
+  const addr = address.toLowerCase();
   const result = await pool.query(
     `SELECT
-       (SELECT COUNT(*) FROM transactions WHERE LOWER(from_address) = LOWER($1)) AS sent_count,
-       (SELECT COUNT(*) FROM transactions WHERE LOWER(to_address) = LOWER($1)) AS received_count,
-       (SELECT COALESCE(SUM(value::numeric), 0) FROM transactions WHERE LOWER(from_address) = LOWER($1)) AS sent_value,
-       (SELECT COALESCE(SUM(value::numeric), 0) FROM transactions WHERE LOWER(to_address) = LOWER($1)) AS received_value`,
-    [address]
+       (SELECT COUNT(*) FROM transactions WHERE from_address = $1) AS sent_count,
+       (SELECT COUNT(*) FROM transactions WHERE to_address = $1) AS received_count,
+       (SELECT COALESCE(SUM(value::numeric), 0) FROM transactions WHERE from_address = $1) AS sent_value,
+       (SELECT COALESCE(SUM(value::numeric), 0) FROM transactions WHERE to_address = $1) AS received_value`,
+    [addr]
   );
   return result.rows[0] ?? null;
 }
@@ -300,13 +302,14 @@ export async function getAddressTransactions(
   address: string, limit: number, offset: number, order: 'asc' | 'desc' = 'desc'
 ): Promise<TransactionRow[]> {
   const pool = getReadPool();
+  const addr = address.toLowerCase();
   const direction = order === 'asc' ? 'ASC' : 'DESC';
   const result = await pool.query(
     `SELECT hash, block_height, from_address, to_address, value, status, input_data
-     FROM transactions WHERE LOWER(from_address) = LOWER($1) OR LOWER(to_address) = LOWER($1)
+     FROM transactions WHERE from_address = $1 OR to_address = $1
      ORDER BY block_height ${direction}, tx_index ${direction}
      LIMIT $2 OFFSET $3`,
-    [address, limit, offset]
+    [addr, limit, offset]
   );
   return result.rows;
 }
