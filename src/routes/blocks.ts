@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify';
+import { getReadPool } from '../db/pool.js';
 import { getBlocksPage, getBlocksByCursor, getBlockByHeight, getTransactionsByBlockHeight, getInternalTxsByBlock } from '../db/queries.js';
 import { clamp, parseNumber, parseOrder, parseCursor, encodeCursor } from '../lib/pagination.js';
 import { cached } from '../lib/cache.js';
@@ -65,6 +66,26 @@ export default async function blocksRoutes(app: FastifyInstance) {
       return { ok: false, error: 'Block not found' };
     }
     return { ok: true, data };
+  });
+
+  // GET /blocks/:height/txs — transactions in a block
+  app.get('/:height/txs', async (request, reply) => {
+    const { height } = request.params as { height: string };
+    const query = request.query as Record<string, string>;
+    const limit = Math.min(Number(query.limit ?? 50), 200);
+    const offset = Number(query.offset ?? 0);
+    const n = parseInt(height, 10);
+    if (isNaN(n) || n < 0) return reply.status(400).send({ ok: false, error: 'Invalid block height' });
+    const pool = getReadPool();
+    const [rows, count] = await Promise.all([
+      pool.query(
+        `SELECT hash, from_address, to_address, value, status, gas_limit, gas_used, gas_price, tx_index, input_data, type
+         FROM transactions WHERE block_height = $1 ORDER BY tx_index ASC LIMIT $2 OFFSET $3`,
+        [n, limit, offset]
+      ),
+      pool.query('SELECT COUNT(*) FROM transactions WHERE block_height = $1', [n]),
+    ]);
+    return { ok: true, data: { height: n, total: Number(count.rows[0].count), items: rows.rows } };
   });
 
   // GET /blocks/:height/internal — internal transactions in a block
