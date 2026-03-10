@@ -352,7 +352,7 @@ async function handleGetLogs(q: Record<string, string>): Promise<EtherscanRespon
   let paramIndex = 3;
 
   if (q.address) {
-    clauses.push(`e.address = $${paramIndex}`);
+    clauses.push(`e.contract_address = ${paramIndex}`);
     params.push(q.address.toLowerCase());
     paramIndex++;
   }
@@ -369,7 +369,7 @@ async function handleGetLogs(q: Record<string, string>): Promise<EtherscanRespon
 
   const pool = getReadPool();
   const result = await pool.query(
-    `SELECT e.address, e.topic0, e.topic1, e.topic2, e.topic3,
+    `SELECT e.contract_address as address, e.topic0, e.topic1, e.topic2, e.topic3,
             e.data, e.block_height, e.tx_hash, e.log_index,
             b.timestamp_ms, e.tx_index
      FROM events e
@@ -464,7 +464,7 @@ async function handleGetSourceCode(q: Record<string, string>): Promise<Etherscan
   const pool = getReadPool();
   const result = await pool.query(
     `SELECT c.address, c.is_verified, c.abi, c.source_code,
-            c.compiler_version, c.optimization_used, c.optimization_runs,
+            c.compiler_version, (c.optimization_runs IS NOT NULL AND c.optimization_runs > 0) AS optimization_used, c.optimization_runs,
             c.evm_version, c.contract_name, c.constructor_args
      FROM contracts c WHERE c.address = $1 LIMIT 1`,
     [address.toLowerCase()]
