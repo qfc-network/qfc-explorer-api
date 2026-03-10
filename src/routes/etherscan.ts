@@ -415,7 +415,7 @@ async function handleGetLogs(q: Record<string, string>): Promise<EtherscanRespon
   let paramIndex = 3;
 
   if (q.address) {
-    clauses.push(`e.contract_address = ${paramIndex}`);
+    clauses.push(`e.contract_address = $${paramIndex}`);
     params.push(q.address.toLowerCase());
     paramIndex++;
   }
