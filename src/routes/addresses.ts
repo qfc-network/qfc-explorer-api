@@ -15,8 +15,11 @@ import { detectMultisig } from '../lib/multisig-detector.js';
 
 export default async function addressesRoutes(app: FastifyInstance) {
   // GET /address/:address
-  app.get('/:address', async (request) => {
+  app.get('/:address', async (request, reply) => {
     const { address } = request.params as { address: string };
+    if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
+      return reply.status(400).send({ ok: false, error: 'Invalid Ethereum address format' });
+    }
     const q = request.query as Record<string, string>;
     const tab = q.tab || 'transactions';
     const page = parseNumber(q.page, 1);
