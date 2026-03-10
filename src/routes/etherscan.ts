@@ -67,6 +67,12 @@ export default async function etherscanRoutes(app: FastifyInstance) {
       if (action === 'balancemulti') {
         return handleBalanceMulti(q);
       }
+      if (action === 'tokenbalance') {
+        return handleTokenBalance(q);
+      }
+      if (action === 'getminedblocks') {
+        return handleGetMinedBlocks(q);
+      }
       return err(`Unknown action: ${q.action}`);
     }
 
@@ -80,6 +86,25 @@ export default async function etherscanRoutes(app: FastifyInstance) {
       }
       if (action === 'checkverifystatus') {
         return handleCheckVerifyStatus(q);
+      }
+      return err(`Unknown action: ${q.action}`);
+    }
+
+    // --- module=logs ---
+    if (module === 'logs') {
+      if (action === 'getlogs') {
+        return handleGetLogs(q);
+      }
+      return err(`Unknown action: ${q.action}`);
+    }
+
+    // --- module=stats ---
+    if (module === 'stats') {
+      if (action === 'ethsupply') {
+        return handleEthSupply();
+      }
+      if (action === 'ethprice') {
+        return handleEthPrice();
       }
       return err(`Unknown action: ${q.action}`);
     }
@@ -266,6 +291,146 @@ async function handleBalanceMulti(q: Record<string, string>): Promise<EtherscanR
   }));
 
   return ok(rows);
+}
+
+async function handleTokenBalance(q: Record<string, string>): Promise<EtherscanResponse> {
+  const address = q.address;
+  if (!address) return err('Missing address parameter');
+  const contractaddress = q.contractaddress;
+  if (!contractaddress) return err('Missing contractaddress parameter');
+
+  const pool = getReadPool();
+  const result = await pool.query(
+    'SELECT balance FROM token_balances WHERE holder_address = $1 AND token_address = $2 LIMIT 1',
+    [address.toLowerCase(), contractaddress.toLowerCase()]
+  );
+
+  const balance = result.rows[0]?.balance ?? '0';
+  return ok(String(balance));
+}
+
+async function handleGetMinedBlocks(q: Record<string, string>): Promise<EtherscanResponse> {
+  const address = q.address;
+  if (!address) return err('Missing address parameter');
+
+  const page = parseNumber(q.page, 1);
+  const offset = clamp(parseNumber(q.offset, 10), 1, 10000);
+  const skip = (page - 1) * offset;
+
+  const pool = getReadPool();
+  const result = await pool.query(
+    `SELECT height AS blockNumber, timestamp_ms, tx_count AS blockReward
+     FROM blocks
+     WHERE producer = $1
+     ORDER BY height DESC
+     LIMIT $2 OFFSET $3`,
+    [address.toLowerCase(), offset, skip]
+  );
+
+  const rows = result.rows.map((r: Record<string, unknown>) => ({
+    blockNumber: String(r.blocknumber ?? ''),
+    timeStamp: r.timestamp_ms ? String(Math.floor(Number(r.timestamp_ms) / 1000)) : '0',
+    blockReward: String(r.blockreward ?? '0'),
+  }));
+
+  return ok(rows);
+}
+
+// ---------------------------------------------------------------------------
+// logs handlers
+// ---------------------------------------------------------------------------
+
+async function handleGetLogs(q: Record<string, string>): Promise<EtherscanResponse> {
+  const fromBlock = q.fromblock || '0';
+  const toBlock = q.toblock || '99999999';
+
+  const clauses: string[] = [
+    'e.block_height::bigint >= $1::bigint',
+    'e.block_height::bigint <= $2::bigint',
+  ];
+  const params: (string | number)[] = [fromBlock, toBlock];
+  let paramIndex = 3;
+
+  if (q.address) {
+    clauses.push(`e.address = $${paramIndex}`);
+    params.push(q.address.toLowerCase());
+    paramIndex++;
+  }
+  if (q.topic0) {
+    clauses.push(`e.topic0 = $${paramIndex}`);
+    params.push(q.topic0.toLowerCase());
+    paramIndex++;
+  }
+  if (q.topic1) {
+    clauses.push(`e.topic1 = $${paramIndex}`);
+    params.push(q.topic1.toLowerCase());
+    paramIndex++;
+  }
+
+  const pool = getReadPool();
+  const result = await pool.query(
+    `SELECT e.address, e.topic0, e.topic1, e.topic2, e.topic3,
+            e.data, e.block_height, e.tx_hash, e.log_index,
+            b.timestamp_ms, e.tx_index
+     FROM events e
+     LEFT JOIN blocks b ON b.height = e.block_height
+     WHERE ${clauses.join(' AND ')}
+     ORDER BY e.block_height ASC, e.log_index ASC
+     LIMIT 1000`,
+    params
+  );
+
+  const rows = result.rows.map((r: Record<string, unknown>) => {
+    const topics: string[] = [];
+    if (r.topic0) topics.push(String(r.topic0));
+    if (r.topic1) topics.push(String(r.topic1));
+    if (r.topic2) topics.push(String(r.topic2));
+    if (r.topic3) topics.push(String(r.topic3));
+    return {
+      address: r.address,
+      topics,
+      data: r.data ?? '0x',
+      blockNumber: r.block_height ? '0x' + BigInt(r.block_height as string).toString(16) : '0x0',
+      timeStamp: r.timestamp_ms ? '0x' + Math.floor(Number(r.timestamp_ms) / 1000).toString(16) : '0x0',
+      gasPrice: '0x0',
+      gasUsed: '0x0',
+      logIndex: r.log_index != null ? '0x' + Number(r.log_index).toString(16) : '0x0',
+      transactionHash: r.tx_hash ?? '',
+      transactionIndex: r.tx_index != null ? '0x' + Number(r.tx_index).toString(16) : '0x0',
+    };
+  });
+
+  return ok(rows);
+}
+
+// ---------------------------------------------------------------------------
+// stats handlers
+// ---------------------------------------------------------------------------
+
+async function handleEthSupply(): Promise<EtherscanResponse> {
+  // Try RPC eth_getBalance on the zero address or use a known total supply method.
+  // For QFC, query the sum of all account balances as an approximation,
+  // or use the RPC if available.
+  const supply = await rpcCallSafe<string>('eth_getBalance', ['0x0000000000000000000000000000000000000000', 'latest']);
+  if (supply !== null) {
+    // Some chains store total supply info differently; return raw wei string
+    return ok(String(BigInt(supply)));
+  }
+
+  // Fallback: sum of all account balances
+  const pool = getReadPool();
+  const result = await pool.query('SELECT COALESCE(SUM(balance::numeric), 0) AS total FROM accounts');
+  return ok(String(result.rows[0]?.total ?? '0'));
+}
+
+async function handleEthPrice(): Promise<EtherscanResponse> {
+  // QFC has no price oracle — return the expected Etherscan structure with zeroed values
+  return ok({
+    ethbtc: '0',
+    ethbtc_timestamp: String(Math.floor(Date.now() / 1000)),
+    ethusd: '0',
+    ethusd_timestamp: String(Math.floor(Date.now() / 1000)),
+  });
 }
 
 // ---------------------------------------------------------------------------
