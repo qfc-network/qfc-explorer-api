@@ -599,8 +599,8 @@ async function handleVerifySourceCode(params: Record<string, string>): Promise<E
   const optimizationUsed = params.optimizationUsed || params.optimizationused || '0';
   const runs = parseInt(params.runs || '200', 10);
   const constructorArgs = params.constructorArguements || params.constructorarguments || '';
-  // QFC does NOT support PUSH0 — always force paris
-  const evmVersion = 'paris';
+  // QFC EVM runs Cancun spec (PUSH0, MCOPY, TSTORE/TLOAD supported)
+  const evmVersion = 'cancun';
 
   // Fetch deployed bytecode from chain
   const deployedCode = await rpcCallSafe<string>('eth_getCode', [address, 'latest']);

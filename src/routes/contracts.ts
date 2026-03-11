@@ -400,7 +400,7 @@ export default async function contractsRoutes(app: FastifyInstance) {
       // Dynamic import solc (optional dependency)
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const solc = await import(/* webpackIgnore: true */ 'solc' as string) as { compile: (input: string) => string };
-      const evmVersion = body.evmVersion || 'paris';
+      const evmVersion = body.evmVersion || 'cancun';
       const input = JSON.stringify({
         language: 'Solidity',
         sources: { 'contract.sol': { content: body.sourceCode } },
@@ -506,8 +506,8 @@ export default async function contractsRoutes(app: FastifyInstance) {
       // Ensure output selection includes what we need
       if (!jsonInput.settings) jsonInput.settings = {};
       jsonInput.settings.outputSelection = { '*': { '*': ['abi', 'evm.bytecode', 'evm.deployedBytecode'] } };
-      // QFC: always paris
-      if (!jsonInput.settings.evmVersion) jsonInput.settings.evmVersion = 'paris';
+      // QFC: default to cancun
+      if (!jsonInput.settings.evmVersion) jsonInput.settings.evmVersion = 'cancun';
 
       const solc = await import(/* webpackIgnore: true */ 'solc' as string) as { compile: (input: string) => string };
       const output = JSON.parse(solc.compile(JSON.stringify(jsonInput)));
@@ -617,7 +617,7 @@ export default async function contractsRoutes(app: FastifyInstance) {
 
     try {
       const solc = await import(/* webpackIgnore: true */ 'solc' as string) as { compile: (input: string) => string };
-      const evmVersion = body.evm_version || 'paris';
+      const evmVersion = body.evm_version || 'cancun';
       const optimizationRuns = body.optimization_runs ?? null;
 
       // Build Solidity Standard JSON Input from multi-file sources
@@ -764,7 +764,7 @@ export default async function contractsRoutes(app: FastifyInstance) {
     }
 
     try {
-      const evmVersion = body.evm_version || 'paris';
+      const evmVersion = body.evm_version || 'cancun';
       const result = await compileVyper(body.source_code, body.compiler_version, evmVersion);
 
       if ('error' in result) {

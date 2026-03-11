@@ -33,7 +33,7 @@ function exec(cmd: string, args: string[], timeout = 60_000): Promise<{ stdout: 
 export async function compileVyper(
   source: string,
   version: string,
-  evmVersion: string = 'paris',
+  evmVersion: string = 'cancun',
 ): Promise<VyperCompileResult | VyperCompileError> {
   const tmpDir = await mkdtemp(join(tmpdir(), 'vyper-'));
   const srcPath = join(tmpDir, 'contract.vy');

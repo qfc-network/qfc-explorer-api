@@ -143,7 +143,7 @@ Admin commands via `indexer_state` table: rescan from height, retry failed block
 Refreshes `daily_stats` table after each batch.
 
 ## QFC-Specific Notes
-- **EVM version**: QFC does NOT support PUSH0. Always `evmVersion: "paris"`.
+- **EVM version**: QFC runs Cancun spec. Default `evmVersion: "cancun"`. Supports PUSH0, MCOPY, TSTORE/TLOAD.
 - **eth_call quirk**: QFC testnet may return `0x` for view functions. Use `eth_getStorageAt` as workaround.
 - **Proxy detection**: Reads EIP-1967/1822/Beacon storage slots to identify proxy contracts.
 - **Custom RPC methods**: `qfc_getEpoch`, `qfc_getValidators`, `qfc_getNodeInfo`, `qfc_getInferenceStats`, `qfc_getSupportedModels`, etc.
