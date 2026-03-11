@@ -3,6 +3,7 @@ import { RpcClient } from './rpc.js';
 import { parseHeight, processBlock } from './block.js';
 import { processTokenTransfers } from './token.js';
 import { processContracts } from './contract.js';
+import { processAgentEvents } from './agent.js';
 import { processInternalTxs } from './internal-tx.js';
 import {
   getLastProcessedHeight, setLastProcessedHeight, setLastBatchStats,
@@ -84,11 +85,14 @@ async function indexBlock(rpc: RpcClient, height: bigint): Promise<number> {
   endStage1();
   if (!result) { endBlock(); return 0; }
 
-  // Step 2 & 3: Token + Contract (independent, run in parallel)
+  // Step 2 & 3: Token + Contract + Agent events (independent, run in parallel)
   const endStage2 = pipelineStageDuration.startTimer({ stage: 'token_contract' });
   await Promise.all([
     processTokenTransfers(rpc, result),
     processContracts(rpc, result),
+    processAgentEvents(result).catch((e) =>
+      console.warn(`Agent event processing failed for block ${height}:`, e.message)
+    ),
   ]);
   endStage2();
 
