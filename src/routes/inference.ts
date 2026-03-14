@@ -42,22 +42,15 @@ export default async function inferenceRoutes(app: FastifyInstance) {
     const submitter = q.submitter?.toLowerCase() || null;
 
     const data = await cached(`inference:tasks:${page}:${limit}:${statusFilter}:${submitter}`, 10, async () => {
-      // Fetch all tasks from RPC
-      const allTasks = await rpcCallSafe<TaskItem[]>('qfc_getInferenceTasks', []) ?? [];
+      // Build RPC filter — qfc_listPublicTasks supports server-side filtering & pagination
+      const filter: Record<string, unknown> = {};
+      if (statusFilter) filter.status = statusFilter;
+      if (submitter) filter.submitter = submitter;
 
-      // Filter
-      let filtered = allTasks;
-      if (statusFilter) {
-        filtered = filtered.filter((t) => String(t.status).toLowerCase() === statusFilter.toLowerCase());
-      }
-      if (submitter) {
-        filtered = filtered.filter((t) => String(t.submitter).toLowerCase() === submitter);
-      }
+      // Fetch all matching tasks (with generous limit for stats calculation)
+      const allTasks = await rpcCallSafe<TaskItem[]>('qfc_listPublicTasks', [{ ...filter, limit: 1000 }]) ?? [];
 
-      // Sort by createdAt descending
-      filtered.sort((a, b) => Number(b.createdAt ?? 0) - Number(a.createdAt ?? 0));
-
-      // Stats
+      // Stats from full result set
       const completed = allTasks.filter((t) => String(t.status).toLowerCase() === 'completed').length;
       const pending = allTasks.filter((t) => String(t.status).toLowerCase() === 'pending').length;
       const failed = allTasks.filter((t) => String(t.status).toLowerCase() === 'failed').length;
@@ -66,10 +59,10 @@ export default async function inferenceRoutes(app: FastifyInstance) {
         ? Math.round(completedTasks.reduce((sum, t) => sum + Number(t.executionTimeMs), 0) / completedTasks.length)
         : 0;
 
-      // Paginate
-      const total = filtered.length;
+      // Paginate (RPC already returns newest-first)
+      const total = allTasks.length;
       const start = (page - 1) * limit;
-      const items = filtered.slice(start, start + limit);
+      const items = allTasks.slice(start, start + limit);
 
       return {
         page,
@@ -90,7 +83,7 @@ export default async function inferenceRoutes(app: FastifyInstance) {
       const [models, stats, allTasks, miners] = await Promise.all([
         rpcCallSafe<ModelItem[]>('qfc_getSupportedModels', []) ?? [],
         rpcCallSafe<Record<string, unknown>>('qfc_getInferenceStats', []),
-        rpcCallSafe<TaskItem[]>('qfc_getInferenceTasks', []) ?? [],
+        rpcCallSafe<TaskItem[]>('qfc_listPublicTasks', [{ limit: 1000 }]) ?? [],
         rpcCallSafe<Array<Record<string, unknown>>>('qfc_getRegisteredMiners', []) ?? [],
       ]);
 
