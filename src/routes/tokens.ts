@@ -243,6 +243,57 @@ export default async function tokensRoutes(app: FastifyInstance) {
     return { ok: true, data: { page, limit, order, type: type ?? null, items } };
   });
 
+  // GET /tokens/nfts/transfers — recent NFT transfers only (ERC-721 + ERC-1155)
+  app.get('/nfts/transfers', async (request) => {
+    const q = request.query as Record<string, string>;
+    const page = parseNumber(q.page, 1);
+    const limit = clamp(parseNumber(q.limit, 25), 1, 100);
+    const order = parseOrder(q.order);
+    const offset = (page - 1) * limit;
+    const pool = getReadPool();
+    const direction = order === 'asc' ? 'ASC' : 'DESC';
+
+    const result = await pool.query(
+      `SELECT tt.tx_hash, tt.block_height, tt.token_address, tt.from_address, tt.to_address,
+              tt.value, tt.token_id,
+              t.name AS token_name, t.symbol AS token_symbol, t.decimals AS token_decimals, t.token_type
+       FROM token_transfers tt
+       LEFT JOIN tokens t ON t.address = tt.token_address
+       WHERE t.token_type IN ('erc721', 'erc1155')
+       ORDER BY tt.block_height ${direction}, tt.log_index ${direction}
+       LIMIT $1 OFFSET $2`,
+      [limit, offset],
+    );
+
+    return { ok: true, data: { page, limit, order, type: 'nft', items: result.rows } };
+  });
+
+  // GET /tokens/nfts/mints — recent NFT mints inferred from zero-address transfers
+  app.get('/nfts/mints', async (request) => {
+    const q = request.query as Record<string, string>;
+    const page = parseNumber(q.page, 1);
+    const limit = clamp(parseNumber(q.limit, 25), 1, 100);
+    const order = parseOrder(q.order);
+    const offset = (page - 1) * limit;
+    const pool = getReadPool();
+    const direction = order === 'asc' ? 'ASC' : 'DESC';
+
+    const result = await pool.query(
+      `SELECT tt.tx_hash, tt.block_height, tt.token_address, tt.from_address, tt.to_address,
+              tt.value, tt.token_id,
+              t.name AS token_name, t.symbol AS token_symbol, t.decimals AS token_decimals, t.token_type
+       FROM token_transfers tt
+       LEFT JOIN tokens t ON t.address = tt.token_address
+       WHERE t.token_type IN ('erc721', 'erc1155')
+         AND LOWER(tt.from_address) = '0x0000000000000000000000000000000000000000'
+       ORDER BY tt.block_height ${direction}, tt.log_index ${direction}
+       LIMIT $1 OFFSET $2`,
+      [limit, offset],
+    );
+
+    return { ok: true, data: { page, limit, order, type: 'nft_mint', items: result.rows } };
+  });
+
   // GET /tokens/:address
   app.get('/:address', async (request, reply) => {
     const { address } = request.params as { address: string };
