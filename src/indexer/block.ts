@@ -4,6 +4,11 @@ import { RpcClient } from './rpc.js';
 import type { RpcBlock, RpcReceipt, RpcTransaction } from './types.js';
 import { hexToBigIntString, hexToBuffer } from './utils.js';
 
+function isHistoricalStateError(error: unknown): boolean {
+  return error instanceof Error
+    && /Storage error|state|archive|histor/i.test(error.message);
+}
+
 export function parseHeight(hexValue: string): bigint {
   const parsed = hexToBigIntString(hexValue);
   if (!parsed) {
@@ -110,8 +115,24 @@ async function upsertAccounts(client: PoolClient, addresses: string[], blockHeig
 export async function refreshAccountState(
   client: PoolClient, rpc: RpcClient, address: string, blockHex: string, blockHeight: bigint
 ): Promise<void> {
-  const balanceHex = await rpc.callWithRetry<string>('eth_getBalance', [address, blockHex]);
-  const nonceHex = await rpc.callWithRetry<string>('eth_getTransactionCount', [address, blockHex]);
+  let balanceHex: string;
+  let nonceHex: string;
+
+  try {
+    balanceHex = await rpc.callWithRetry<string>('eth_getBalance', [address, blockHex]);
+    nonceHex = await rpc.callWithRetry<string>('eth_getTransactionCount', [address, blockHex]);
+  } catch (error) {
+    if (!isHistoricalStateError(error)) {
+      throw error;
+    }
+
+    console.warn(
+      `Historical state unavailable for ${address} at block ${blockHeight}; falling back to latest state`
+    );
+    balanceHex = await rpc.callWithRetry<string>('eth_getBalance', [address, 'latest']);
+    nonceHex = await rpc.callWithRetry<string>('eth_getTransactionCount', [address, 'latest']);
+  }
+
   const balance = hexToBigIntString(balanceHex) ?? '0';
   const nonce = parseHeight(nonceHex).toString(10);
 
