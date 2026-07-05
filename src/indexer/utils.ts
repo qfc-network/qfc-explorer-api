@@ -19,6 +19,24 @@ export function hexToNumber(value: string | null | undefined): number | null {
   return Number.isSafeInteger(asNumber) ? asNumber : null;
 }
 
+// Below this, a timestamp can only be seconds: 1e12 ms is 2001, before the
+// chain existed, while 1e12 seconds is year 33658.
+const MS_THRESHOLD = 1_000_000_000_000n;
+
+/**
+ * Convert an RPC block timestamp (hex) to milliseconds. qfc-core emitted
+ * milliseconds before PR #139 and Unix seconds (Ethereum-standard) after,
+ * so detect the unit rather than assume one.
+ */
+export function rpcTimestampToMs(value: string | null | undefined): bigint | null {
+  const parsed = hexToBigIntString(value);
+  if (parsed === null) {
+    return null;
+  }
+  const ts = BigInt(parsed);
+  return ts < MS_THRESHOLD ? ts * 1000n : ts;
+}
+
 export function hexToBuffer(value: string | null | undefined): Buffer | null {
   if (!value) {
     return null;

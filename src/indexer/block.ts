@@ -2,7 +2,7 @@ import { getPool } from '../db/pool.js';
 import type { PoolClient } from 'pg';
 import { RpcClient } from './rpc.js';
 import type { RpcBlock, RpcReceipt, RpcTransaction } from './types.js';
-import { hexToBigIntString, hexToBuffer } from './utils.js';
+import { hexToBigIntString, hexToBuffer, rpcTimestampToMs } from './utils.js';
 
 function isHistoricalStateError(error: unknown): boolean {
   return error instanceof Error
@@ -45,7 +45,7 @@ async function upsertBlock(client: PoolClient, block: RpcBlock): Promise<void> {
     [
       block.hash, height.toString(10), block.parentHash, block.stateRoot,
       block.transactionsRoot, block.receiptsRoot, block.miner?.toLowerCase() ?? null,
-      parseHeight(block.timestamp).toString(10),
+      (rpcTimestampToMs(block.timestamp) ?? 0n).toString(10),
       parseHeight(block.gasLimit).toString(10),
       parseHeight(block.gasUsed).toString(10),
       hexToBuffer(block.extraData),
