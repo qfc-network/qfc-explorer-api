@@ -8,9 +8,12 @@
 
 BEGIN;
 
--- transactions: code upserts ON CONFLICT (hash, block_height)
-ALTER TABLE transactions DROP CONSTRAINT transactions_pkey;
-ALTER TABLE transactions ADD CONSTRAINT transactions_pkey PRIMARY KEY (hash, block_height);
+-- transactions: code upserts ON CONFLICT (hash, block_height).
+-- Keep the (hash) PK — contracts/events/token_transfers FKs depend on it;
+-- a plain unique index on exactly (hash, block_height) satisfies the
+-- ON CONFLICT arbiter inference.
+CREATE UNIQUE INDEX transactions_hash_block_height_key
+  ON transactions (hash, block_height);
 
 -- events: code upserts ON CONFLICT (tx_hash, log_index, block_height)
 ALTER TABLE events DROP CONSTRAINT events_tx_hash_log_index_key;
