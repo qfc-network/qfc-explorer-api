@@ -77,18 +77,22 @@ const CATEGORY_COLORS: Record<string, string> = {
  * Identify a transaction by its input data selector and optional address label info.
  */
 export function identifyTransaction(
-  inputData: string | null | undefined,
+  inputData: string | Buffer | null | undefined,
   toAddress: string | null | undefined,
   value: string,
   addressLabel?: { category?: string | null; label?: string } | null,
 ): TransactionLabel | null {
+  // input_data comes back from Postgres as a Buffer (BYTEA); normalize to hex
+  const input = Buffer.isBuffer(inputData)
+    ? `0x${inputData.toString('hex')}`
+    : inputData;
   // Extract the 4-byte selector from input data
-  if (!inputData || inputData === '0x' || inputData.length < 10) {
+  if (!input || input === '0x' || input.length < 10) {
     // Plain ETH/QFC transfer (no input data)
     return null;
   }
 
-  const selector = inputData.slice(0, 10).toLowerCase();
+  const selector = input.slice(0, 10).toLowerCase();
   const method = KNOWN_METHODS[selector];
 
   if (!method) {
