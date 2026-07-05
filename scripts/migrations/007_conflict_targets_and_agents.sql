@@ -25,7 +25,10 @@ ALTER TABLE token_transfers ADD CONSTRAINT token_transfers_tx_hash_log_index_blo
 
 -- token_balances: code upserts ON CONFLICT (token_address, holder_address, COALESCE(token_id, ''))
 -- — an expression target needs a matching unique *expression* index.
-ALTER TABLE token_balances DROP CONSTRAINT token_balances_token_address_holder_address_token_id_key;
+-- The 3-column unique is the table's PK, and PK membership forces
+-- token_id NOT NULL — but ERC-20 balances carry NULL token_id.
+ALTER TABLE token_balances DROP CONSTRAINT token_balances_pkey;
+ALTER TABLE token_balances ALTER COLUMN token_id DROP NOT NULL;
 CREATE UNIQUE INDEX token_balances_addr_holder_tokenid_key
   ON token_balances (token_address, holder_address, COALESCE(token_id, ''));
 
