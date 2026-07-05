@@ -4,7 +4,7 @@ import { clamp, parseNumber, parseOrder } from '../lib/pagination.js';
 import { getReadPool } from '../db/pool.js';
 import { cached } from '../lib/cache.js';
 
-const AGENT_REGISTRY = '0x7791dfa4d489f3d524708cbc0caa8689b76322b3';
+const AGENT_REGISTRY = '0x251b352a1dee7744af8fe1456567d8b22de5e0bb';
 
 // keccak256("AgentRegistered(string,address,address)")
 const AGENT_REGISTERED_TOPIC =

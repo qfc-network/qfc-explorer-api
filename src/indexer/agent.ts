@@ -2,7 +2,7 @@ import { getPool } from '../db/pool.js';
 import type { BlockResult } from './block.js';
 import { parseAddressFromTopic, hexToBigIntString } from './utils.js';
 
-const AGENT_REGISTRY = '0x7791dfa4d489f3d524708cbc0caa8689b76322b3';
+const AGENT_REGISTRY = '0x251b352a1dee7744af8fe1456567d8b22de5e0bb';
 
 // Event topic hashes (keccak256)
 // AgentRegistered(string agentId, address indexed owner, address agentAddress)
