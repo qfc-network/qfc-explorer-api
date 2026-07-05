@@ -108,7 +108,6 @@ jobs:
 
       - name: Update qfc-testnet image tag
         if: github.ref_type == 'branch'
-        continue-on-error: true
         env:
           SHORT_SHA: ${{ github.sha }}
           BRANCH: ${{ github.ref_name }}
